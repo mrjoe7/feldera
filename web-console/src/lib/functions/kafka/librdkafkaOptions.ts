@@ -29,8 +29,10 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 */
 
+import { tuple } from '$lib/functions/common/tuple'
 import invariant from 'tiny-invariant'
 import { match } from 'ts-pattern'
+import * as va from 'valibot'
 
 const deduceType = (row: string[]) =>
   row[5].includes('Type: integer')
@@ -245,14 +247,6 @@ export const librdkafkaOptions = [
     '        10000',
     'medium    ',
     `The maximum time to wait before reconnecting to a broker after the connection has been closed.  \n*Type: integer*`
-  ],
-  [
-    'log_level                               ',
-    '*',
-    '0 .. 7         ',
-    '            6',
-    'low       ',
-    `Logging level (syslog(3) levels)  \n*Type: integer*`
   ],
   [
     'log.thread.name                         ',
@@ -727,6 +721,14 @@ export const librdkafkaOptions = [
     `Controls how to read messages written transactionally: \`read_committed\` - only return transactional messages which have been committed. \`read_uncommitted\` - return all messages, even transactional messages which have been aborted.  \n*Type: enum value*`
   ],
   [
+    'enable.partition.eof                    ',
+    'C',
+    'true, false    ',
+    '        false',
+    'low       ',
+    `Emit RD_KAFKA_RESP_ERR__PARTITION_EOF event whenever the consumer reaches the end of a partition.  \n*Type: boolean*`
+  ],
+  [
     'check.crcs                              ',
     'C',
     'true, false    ',
@@ -858,7 +860,7 @@ export const librdkafkaOptions = [
   .concat([
     [
       'acks                                     ',
-      '  P  ',
+      'P',
       ' -1 .. 1000                                                ',
       '            -1    ',
       ' high      ',
@@ -866,7 +868,7 @@ export const librdkafkaOptions = [
     ],
     [
       'request.timeout.ms                       ',
-      '  P  ',
+      'P',
       ' 1 .. 900000                                               ',
       '         30000    ',
       ' medium    ',
@@ -874,7 +876,7 @@ export const librdkafkaOptions = [
     ],
     [
       'delivery.timeout.ms                      ',
-      '  P  ',
+      'P',
       ' 0 .. 2147483647                                           ',
       '        300000    ',
       ' high      ',
@@ -882,7 +884,7 @@ export const librdkafkaOptions = [
     ],
     [
       'partitioner                              ',
-      '  P  ',
+      'P',
       '                                                           ',
       ' consistent_random',
       ' high      ',
@@ -890,7 +892,7 @@ export const librdkafkaOptions = [
     ],
     [
       'opaque                                   ',
-      '  *  ',
+      '*',
       '                                                           ',
       '                  ',
       ' low       ',
@@ -898,7 +900,7 @@ export const librdkafkaOptions = [
     ],
     [
       'compression.type                         ',
-      '  P  ',
+      'P',
       ' none, gzip, snappy, lz4, zstd                             ',
       '          none    ',
       ' medium    ',
@@ -906,7 +908,7 @@ export const librdkafkaOptions = [
     ],
     [
       'compression.level                        ',
-      '  P  ',
+      'P',
       ' -1 .. 12                                                  ',
       '            -1    ',
       ' medium    ',
@@ -914,7 +916,7 @@ export const librdkafkaOptions = [
     ],
     [
       'auto.offset.reset                        ',
-      '  C  ',
+      'C',
       ' smallest, earliest, beginning, largest, latest, end, error',
       '       largest    ',
       ' high      ',
@@ -922,7 +924,7 @@ export const librdkafkaOptions = [
     ],
     [
       'consume.callback.max.messages            ',
-      '  C  ',
+      'C',
       ' 0 .. 1000000                                              ',
       '             0    ',
       ' low       ',
@@ -936,18 +938,47 @@ export const librdkafkaOptions = [
       '               ',
       '             ',
       'high      ',
-      `A comma-delimited list of Kafka topics  \n*Type: array*`
+      `A comma-delimited list of Kafka topics to read from  \n*Type: array*`
+    ],
+    [
+      'topic                                   ',
+      'P',
+      '               ',
+      '             ',
+      'high      ',
+      `The Kafka topic to write to  \n*Type: string*`
     ]
   ])
-  .map(row => ({
-    name: row[0].trim(),
-    scope: row[1] as 'C' | 'P' | '*',
-    range: row[2].trim(),
-    default: row[3].trim(),
-    importance: row[4].trim(),
-    description: row[5],
-    type: deduceType(row)
-  }))
+  .map(row => {
+    const data = {
+      name: row[0].trim(),
+      label: row[0].trim().replaceAll('_', '.'),
+      scope: row[1].trim() as 'C' | 'P' | '*',
+      range: row[2].trim(),
+      default: row[3].trim(),
+      importance: row[4].trim(),
+      description: row[5],
+      tooltip: row[5],
+      type: deduceType(row)
+    }
+    if (data.type === 'number') {
+      return {
+        ...data,
+        type: 'number' as const,
+        range: (([, min, max]) => ({ min: parseInt(min), max: parseInt(max) }))(
+          data.range.match(/(\d+) .. (\d+)/) ?? []
+        )
+      }
+    }
+    if (data.type === 'enum') {
+      return {
+        ...data,
+        type: 'enum' as const,
+        range: data.range.split(', ')
+      }
+    }
+    return { ...data, type: data.type }
+  })
 
 export const librdkafkaAuthOptions = [
   'security.protocol',
@@ -968,6 +999,27 @@ export const librdkafkaAuthOptions = [
   'sasl.oauthbearer.extensions'
 ] as const
 
+export const librdkafkaNonAuthFieldsSchema = (() => {
+  const nonAuthFields = librdkafkaOptions
+    .filter(o => !librdkafkaAuthOptions.includes(o.name as any))
+    .map(o =>
+      tuple(
+        o.name.replaceAll('.', '_'),
+        match(o)
+          .with({ type: 'number' }, option => {
+            const error = `Must be in the range of ${option.range.min} to ${option.range.max}`
+            return va.number([va.minValue(option.range.min, error), va.maxValue(option.range.max, error)])
+          })
+          .with({ type: 'enum' }, option => va.picklist(option.range as [string, ...string[]]))
+          .with({ type: 'array' }, { type: 'list' }, () => va.array(va.string()))
+          .with({ type: 'boolean' }, () => va.boolean())
+          .with({ type: 'string' }, () => va.string([va.minLength(1)]))
+          .exhaustive()
+      )
+    )
+  return va.partial(va.object(Object.fromEntries(nonAuthFields)))
+})()
+
 export type LibrdkafkaOptionType = string | number | boolean | string[]
 
 const toKafkaOption = (optionName: string, v: LibrdkafkaOptionType, type: ReturnType<typeof deduceType>) => {
@@ -975,7 +1027,7 @@ const toKafkaOption = (optionName: string, v: LibrdkafkaOptionType, type: Return
     .with('boolean', 'number', () => String(v))
     .with('list', () => {
       invariant(Array.isArray(v), 'librdkafka option ' + optionName + ' ' + v + ' is not an array')
-      return v.join(', ')
+      return v?.join(', ')
     })
     .with('array', () => {
       invariant(Array.isArray(v), 'librdkafka option ' + optionName + ' ' + v + ' is not an array')
@@ -994,7 +1046,7 @@ const toKafkaOption = (optionName: string, v: LibrdkafkaOptionType, type: Return
  * Underscore-delimited fields are used with react-hook-form because its implementation
  * conflicts with dot-delimited fields
  */
-export const toKafkaConfig = (formFields: Record<string, LibrdkafkaOptionType>) => {
+export const toLibrdkafkaConfig = (formFields: Partial<Record<string, LibrdkafkaOptionType>>) => {
   const config = {} as Record<string, string>
   Object.keys(formFields).forEach(fieldName => {
     const v = formFields[fieldName]
@@ -1009,19 +1061,29 @@ export const toKafkaConfig = (formFields: Record<string, LibrdkafkaOptionType>) 
   return config
 }
 
+export const toKafkaConfig = ({ preset_service, ...formFields }: Record<string, LibrdkafkaOptionType>) =>
+  ({
+    kafka_service: preset_service,
+    ...toLibrdkafkaConfig(formFields)
+  }) as ReturnType<typeof toLibrdkafkaConfig>
+
 /**
  * Convert a config with dot-delimited fields to a form object with underscore-delimited fields
  *
  * Underscore-delimited fields are used with react-hook-form because its implementation
  * conflicts with dot-delimited fields
  */
-export const fromKafkaConfig = (config: Record<string, string | string[]>) => {
+export const fromLibrdkafkaConfig = (config: Record<string, string | string[]>) => {
   const formFields = {} as Record<string, LibrdkafkaOptionType>
   Object.keys(config).forEach(optionName => {
     const v = config[optionName]
     const fieldName = optionName.replaceAll('.', '_')
     // TODO: Optimize .find()
-    const type = librdkafkaOptions.find(option => option.name === optionName)?.type ?? 'string'
+    const type = librdkafkaOptions.find(option => option.name === optionName)?.type
+    if (!type) {
+      // Ignore options that are not in librdkafka spec
+      return
+    }
     formFields[fieldName] = match(type)
       .with('boolean', () =>
         v === 'true'
@@ -1036,16 +1098,15 @@ export const fromKafkaConfig = (config: Record<string, string | string[]>) => {
       .with('string', 'enum', () => v)
       .exhaustive()
   })
+
   return formFields
 }
 
-export const librdkafkaDefaultValue = (
-  option: Omit<(typeof librdkafkaOptions)[number], 'name' | 'scope' | 'importance'>
-) =>
-  match(option.type)
-    .with('boolean', () => option.default === 'true')
-    .with('number', () => parseInt(option.default))
-    .with('enum', 'string', () => option.default)
-    .with('list', () => option.default.split(', '))
-    .with('array', () => option.default.split(', '))
-    .exhaustive()
+export const fromKafkaConfig = ({ kafka_service, ...config }: Record<string, string | string[]>) => {
+  return {
+    ...(kafka_service ? { preset_service: kafka_service } : {}),
+    ...fromLibrdkafkaConfig(config)
+  } as ReturnType<typeof fromLibrdkafkaConfig>
+}
+
+export type LibrdkafkaOptions = (typeof librdkafkaOptions)[number]

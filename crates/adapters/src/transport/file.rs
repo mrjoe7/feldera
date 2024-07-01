@@ -1,4 +1,6 @@
-use super::{InputConsumer, InputEndpoint, InputReader, OutputEndpoint, Step};
+use super::{
+    InputConsumer, InputEndpoint, InputReader, OutputEndpoint, Step, TransportInputEndpoint,
+};
 use crate::PipelineState;
 use anyhow::{bail, Error as AnyError, Result as AnyResult};
 use crossbeam::sync::{Parker, Unparker};
@@ -28,16 +30,18 @@ impl FileInputEndpoint {
 }
 
 impl InputEndpoint for FileInputEndpoint {
+    fn is_fault_tolerant(&self) -> bool {
+        false
+    }
+}
+
+impl TransportInputEndpoint for FileInputEndpoint {
     fn open(
         &self,
         consumer: Box<dyn InputConsumer>,
         _start_step: Step,
     ) -> AnyResult<Box<dyn InputReader>> {
         Ok(Box::new(FileInputReader::new(&self.config, consumer)?))
-    }
-
-    fn is_fault_tolerant(&self) -> bool {
-        false
     }
 }
 
@@ -270,7 +274,8 @@ format:
         wait(
             || zset.state().flushed.len() == test_data.len(),
             DEFAULT_TIMEOUT_MS,
-        );
+        )
+        .unwrap();
         for (i, upd) in zset.state().flushed.iter().enumerate() {
             assert_eq!(upd.unwrap_insert(), &test_data[i]);
         }
@@ -329,7 +334,8 @@ format:
             wait(
                 || zset.state().flushed.len() == test_data.len(),
                 DEFAULT_TIMEOUT_MS,
-            );
+            )
+            .unwrap();
             for (i, upd) in zset.state().flushed.iter().enumerate() {
                 assert_eq!(upd.unwrap_insert(), &test_data[i]);
             }

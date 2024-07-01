@@ -1,9 +1,9 @@
 import themeConfig from '$lib/functions/configs/themeConfig'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Settings } from 'src/@core/context/settingsTypes'
-import { NavLink } from 'src/@core/layouts/types'
 
+import { Settings } from '@core/context/settingsTypes'
+import { NavLink } from '@core/layouts/types'
 import Box, { BoxProps } from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
 import ListItem from '@mui/material/ListItem'
@@ -30,7 +30,6 @@ const MenuItemTextMetaWrapper = styled(Box)<BoxProps>({
 
 const VerticalNavLink = ({ item, navVisible, toggleNavVisibility }: Props) => {
   const pathname = usePathname()
-  const IconTag = item.icon || (() => <></>)
   const isNavLinkActive = () =>
     (Array.isArray(item.path) ? item.path : [item.path]).find(path => path && pathname.startsWith(path) && path !== '/')
   const theme = useTheme()
@@ -76,8 +75,9 @@ const VerticalNavLink = ({ item, navVisible, toggleNavVisibility }: Props) => {
             color: 'text.primary',
             transition: 'margin .25s ease-in-out'
           }}
+          style={{ fontSize: '1.5rem' }}
         >
-          <IconTag style={{ fontSize: '1.5rem' }} />
+          {item.icon}
         </ListItemIcon>
 
         <MenuItemTextMetaWrapper>

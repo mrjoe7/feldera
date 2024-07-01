@@ -1,9 +1,16 @@
 //! Support for SQL Timestamp and Date data types.
 
-use crate::interval::{LongInterval, ShortInterval};
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
+use crate::{
+    casts::*,
+    interval::{LongInterval, ShortInterval},
+    FromInteger, ToInteger,
+};
+use chrono::{
+    DateTime, Datelike, Days, Months, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc,
+};
 use core::fmt::Formatter;
 use dbsp::num_entries_scalar;
+use num::PrimInt;
 use pipeline_types::serde_with_context::{
     DateFormat, DeserializeWithContext, SerializeWithContext, SqlSerdeConfig, TimeFormat,
     TimestampFormat,
@@ -13,7 +20,7 @@ use size_of::SizeOf;
 use std::{
     borrow::Cow,
     fmt::{self, Debug},
-    ops::Add,
+    ops::{Add, Sub},
 };
 
 use crate::{
@@ -46,6 +53,20 @@ use crate::{
 pub struct Timestamp {
     // since unix epoch
     milliseconds: i64,
+}
+
+impl ToInteger<i64> for Timestamp {
+    fn to_integer(&self) -> i64 {
+        self.milliseconds
+    }
+}
+
+impl FromInteger<i64> for Timestamp {
+    fn from_integer(value: &i64) -> Self {
+        Timestamp {
+            milliseconds: *value,
+        }
+    }
 }
 
 impl Debug for Timestamp {
@@ -81,6 +102,7 @@ impl SerializeWithContext<SqlSerdeConfig> for Timestamp {
                 serializer.serialize_str(&datetime.format(format_string).to_string())
             }
             TimestampFormat::MillisSinceEpoch => serializer.serialize_i64(self.milliseconds),
+            TimestampFormat::MicrosSinceEpoch => serializer.serialize_i64(self.milliseconds * 1000),
         }
     }
 }
@@ -109,6 +131,10 @@ impl<'de> DeserializeWithContext<'de, SqlSerdeConfig> for Timestamp {
             TimestampFormat::MillisSinceEpoch => {
                 let millis: i64 = Deserialize::deserialize(deserializer)?;
                 Ok(Self::new(millis))
+            }
+            TimestampFormat::MicrosSinceEpoch => {
+                let micros: i64 = Deserialize::deserialize(deserializer)?;
+                Ok(Self::new(micros / 1000))
             }
         }
     }
@@ -162,6 +188,7 @@ impl Timestamp {
 impl<T> From<T> for Timestamp
 where
     i64: From<T>,
+    T: PrimInt,
 {
     fn from(value: T) -> Self {
         Self {
@@ -188,6 +215,20 @@ polymorphic_return_function2!(
     plus,
     Timestamp,
     Timestamp,
+    ShortInterval,
+    ShortInterval,
+    Timestamp,
+    Timestamp
+);
+
+pub fn plus_Date_ShortInterval_Timestamp(left: Date, right: ShortInterval) -> Timestamp {
+    plus_Timestamp_ShortInterval_Timestamp(cast_to_Timestamp_Date(left), right)
+}
+
+polymorphic_return_function2!(
+    plus,
+    Date,
+    Date,
     ShortInterval,
     ShortInterval,
     Timestamp,
@@ -222,6 +263,70 @@ polymorphic_return_function2!(
     Timestamp
 );
 
+pub fn minus_Date_ShortInterval_Timestamp(left: Date, right: ShortInterval) -> Timestamp {
+    minus_Timestamp_ShortInterval_Timestamp(cast_to_Timestamp_Date(left), right)
+}
+
+polymorphic_return_function2!(
+    minus,
+    Date,
+    Date,
+    ShortInterval,
+    ShortInterval,
+    Timestamp,
+    Timestamp
+);
+
+pub fn plus_Date_ShortInterval_Date(left: Date, right: ShortInterval) -> Date {
+    let days = (right.milliseconds() / (86400 * 1000)) as i32;
+    let diff = left.days() + days;
+    Date::new(diff)
+}
+
+polymorphic_return_function2!(plus, Date, Date, ShortInterval, ShortInterval, Date, Date);
+
+pub fn minus_Date_ShortInterval_Date(left: Date, right: ShortInterval) -> Date {
+    let days = (right.milliseconds() / (86400 * 1000)) as i32;
+    let diff = left.days() - days;
+    Date::new(diff)
+}
+
+polymorphic_return_function2!(minus, Date, Date, ShortInterval, ShortInterval, Date, Date);
+
+pub fn plus_Date_LongInterval_Date(left: Date, right: LongInterval) -> Date {
+    let date = left.to_date();
+    if right.months() < 0 {
+        let result = date
+            .checked_sub_months(Months::new(-right.months() as u32))
+            .unwrap();
+        Date::from_date(result)
+    } else {
+        let result = date
+            .checked_add_months(Months::new(right.months() as u32))
+            .unwrap();
+        Date::from_date(result)
+    }
+}
+
+polymorphic_return_function2!(plus, Date, Date, LongInterval, LongInterval, Date, Date);
+
+pub fn minus_Date_LongInterval_Date(left: Date, right: LongInterval) -> Date {
+    let date = left.to_date();
+    if right.months() < 0 {
+        let result = date
+            .checked_add_months(Months::new(-right.months() as u32))
+            .unwrap();
+        Date::from_date(result)
+    } else {
+        let result = date
+            .checked_sub_months(Months::new(right.months() as u32))
+            .unwrap();
+        Date::from_date(result)
+    }
+}
+
+polymorphic_return_function2!(minus, Date, Date, LongInterval, LongInterval, Date, Date);
+
 pub fn minus_Timestamp_Timestamp_LongInterval(left: Timestamp, right: Timestamp) -> LongInterval {
     let ldate = left.to_dateTime();
     let rdate = right.to_dateTime();
@@ -247,6 +352,34 @@ polymorphic_return_function2!(
     Timestamp,
     Timestamp,
     Timestamp,
+    LongInterval,
+    LongInterval
+);
+
+pub fn minus_Date_Timestamp_LongInterval(left: Date, right: Timestamp) -> LongInterval {
+    minus_Timestamp_Timestamp_LongInterval(cast_to_Timestamp_Date(left), right)
+}
+
+polymorphic_return_function2!(
+    minus,
+    Date,
+    Date,
+    Timestamp,
+    Timestamp,
+    LongInterval,
+    LongInterval
+);
+
+pub fn minus_Timestamp_Date_LongInterval(left: Timestamp, right: Date) -> LongInterval {
+    minus_Timestamp_Timestamp_LongInterval(left, cast_to_Timestamp_Date(right))
+}
+
+polymorphic_return_function2!(
+    minus,
+    Timestamp,
+    Timestamp,
+    Date,
+    Date,
     LongInterval,
     LongInterval
 );
@@ -421,6 +554,83 @@ some_polymorphic_function3!(
     Timestamp
 );
 
+pub fn tumble_Timestamp_ShortInterval_ShortInterval(
+    ts: Timestamp,
+    i: ShortInterval,
+    t: ShortInterval,
+) -> Timestamp {
+    let t_ms = t.milliseconds();
+    let ts_ms = ts.milliseconds() - t_ms;
+    let i_ms = i.milliseconds();
+    let round = ts_ms - ts_ms % i_ms;
+    Timestamp::new(round + t_ms)
+}
+
+some_polymorphic_function3!(
+    tumble,
+    Timestamp,
+    Timestamp,
+    ShortInterval,
+    ShortInterval,
+    ShortInterval,
+    ShortInterval,
+    Timestamp
+);
+
+// Start of first interval which contains ts
+pub fn hop_start(
+    ts: Timestamp,
+    period: ShortInterval,
+    size: ShortInterval,
+    start: ShortInterval,
+) -> i64 {
+    let ts_ms = ts.milliseconds();
+    let size_ms = size.milliseconds();
+    let period_ms = period.milliseconds();
+    let start_ms = start.milliseconds();
+    ts_ms - ((ts_ms - start_ms) % period_ms) + period_ms - size_ms
+}
+
+// Helper function used by the monotonicity analysis for hop table functions
+pub fn hop_start_timestamp(
+    ts: Timestamp,
+    period: ShortInterval,
+    size: ShortInterval,
+    start: ShortInterval,
+) -> Timestamp {
+    Timestamp::new(hop_start(ts, period, size, start))
+}
+
+pub fn hop_Timestamp_ShortInterval_ShortInterval_ShortInterval(
+    ts: Timestamp,
+    period: ShortInterval,
+    size: ShortInterval,
+    start: ShortInterval,
+) -> Vec<Timestamp> {
+    let mut result = Vec::<Timestamp>::new();
+    let round = hop_start(ts, period, size, start);
+    let mut add = 0;
+    while add < size.milliseconds() {
+        result.push(Timestamp::new(round + add));
+        add += period.milliseconds();
+    }
+    result
+}
+
+pub fn hop_TimestampN_ShortInterval_ShortInterval_ShortInterval(
+    ts: Option<Timestamp>,
+    period: ShortInterval,
+    size: ShortInterval,
+    start: ShortInterval,
+) -> Vec<Timestamp> {
+    match ts {
+        None => Vec::new(),
+        Some(ts) => {
+            hop_Timestamp_ShortInterval_ShortInterval_ShortInterval(ts, period, size, start)
+        }
+    }
+}
+
 //////////////////////////// Date
 
 #[derive(
@@ -451,6 +661,12 @@ impl Date {
         Self { days }
     }
 
+    pub fn from_date(date: NaiveDate) -> Self {
+        Self {
+            days: (date - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32,
+        }
+    }
+
     pub fn days(&self) -> i32 {
         self.days
     }
@@ -463,6 +679,15 @@ impl Date {
         Utc.timestamp_opt(self.days() as i64 * 86400, 0)
             .single()
             .unwrap()
+    }
+
+    pub fn to_date(&self) -> NaiveDate {
+        let nd = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        if self.days >= 0 {
+            nd.checked_add_days(Days::new(self.days as u64)).unwrap()
+        } else {
+            nd.checked_sub_days(Days::new((-self.days) as u64)).unwrap()
+        }
     }
 
     pub fn first_day_of_week() -> i64 {
@@ -486,11 +711,24 @@ impl fmt::Debug for Date {
 impl<T> From<T> for Date
 where
     i32: From<T>,
+    T: PrimInt,
 {
     fn from(value: T) -> Self {
         Self {
             days: i32::from(value),
         }
+    }
+}
+
+impl ToInteger<i32> for Date {
+    fn to_integer(&self) -> i32 {
+        self.days()
+    }
+}
+
+impl FromInteger<i32> for Date {
+    fn from_integer(value: &i32) -> Self {
+        Self { days: *value }
     }
 }
 
@@ -527,7 +765,8 @@ impl<'de> DeserializeWithContext<'de, SqlSerdeConfig> for Date {
     {
         match config.date_format {
             DateFormat::String(format) => {
-                let str: &'de str = Deserialize::deserialize(deserializer)?;
+                let str: Cow<'de, str> = Deserialize::deserialize(deserializer)?;
+
                 let date = NaiveDate::parse_from_str(str.trim(), format)
                     .map_err(|e| D::Error::custom(format!("invalid date string '{str}': {e}")))?;
                 Ok(Self::new(
@@ -547,7 +786,7 @@ impl<'de> Deserialize<'de> for Date {
     where
         D: Deserializer<'de>,
     {
-        let str: &'de str = Deserialize::deserialize(deserializer)?;
+        let str: Cow<'de, str> = Deserialize::deserialize(deserializer)?;
         let date = NaiveDate::parse_from_str(str.trim(), "%Y-%m-%d")
             .map_err(|e| D::Error::custom(format!("invalid date string '{str}': {e}")))?;
         Ok(Self::new(
@@ -748,11 +987,28 @@ pub struct Time {
     nanoseconds: u64,
 }
 
-const BILLION: u64 = 1000000000;
+impl ToInteger<u64> for Time {
+    fn to_integer(&self) -> u64 {
+        self.nanoseconds
+    }
+}
+
+impl FromInteger<u64> for Time {
+    fn from_integer(value: &u64) -> Self {
+        Self {
+            nanoseconds: *value,
+        }
+    }
+}
+
+const BILLION: u64 = 1_000_000_000;
 
 impl Time {
     pub const fn new(nanoseconds: u64) -> Self {
-        Self { nanoseconds }
+        // Calcite cannot represent precisions higher than milliseconds
+        Self {
+            nanoseconds: (nanoseconds / 1_000_000) * 1_000_000,
+        }
     }
 
     pub fn nanoseconds(&self) -> u64 {
@@ -773,11 +1029,40 @@ impl Time {
         )
         .unwrap()
     }
+
+    /// Time that represents the duration of a day
+    pub const ONE_DAY: Time = Time {
+        nanoseconds: 86_400_000_000_000, // Total nanoseconds in a day
+    };
+}
+
+impl Add<ShortInterval> for Time {
+    type Output = Self;
+
+    fn add(self, rhs: ShortInterval) -> Self::Output {
+        let nanos_in_day = Time::ONE_DAY.nanoseconds() as i64;
+
+        let time = self.nanoseconds() as i64 + nanos_in_day;
+        let int = rhs.nanoseconds() % nanos_in_day;
+
+        let rem = (time + int) % nanos_in_day;
+
+        Time::new(rem.unsigned_abs())
+    }
+}
+
+impl Sub<ShortInterval> for Time {
+    type Output = Self;
+
+    fn sub(self, rhs: ShortInterval) -> Self::Output {
+        self + (ShortInterval::new(-rhs.milliseconds()))
+    }
 }
 
 impl<T> From<T> for Time
 where
     u64: From<T>,
+    T: PrimInt,
 {
     fn from(value: T) -> Self {
         Self {
@@ -817,7 +1102,7 @@ impl<'de> DeserializeWithContext<'de, SqlSerdeConfig> for Time {
     {
         match config.time_format {
             TimeFormat::String(format) => {
-                let str: &'de str = Deserialize::deserialize(deserializer)?;
+                let str: Cow<'de, str> = Deserialize::deserialize(deserializer)?;
                 let time = NaiveTime::parse_from_str(str.trim(), format)
                     .map_err(|e| D::Error::custom(format!("invalid time string '{str}': {e}")))?;
                 Ok(Self::from_time(time))

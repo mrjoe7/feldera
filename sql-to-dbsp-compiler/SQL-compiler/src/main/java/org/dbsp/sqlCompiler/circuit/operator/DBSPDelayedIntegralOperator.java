@@ -1,19 +1,17 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.NonCoreIR;
 
 import java.util.List;
 
-/**
- * This operator is like an integral followed by a delay.
+/** This operator is like an integral followed by a delay.
  * This shows up often, and it can be implemented more efficiently
- * than using the pair.
- */
+ * than using the pair. */
 @NonCoreIR
-public class DBSPDelayedIntegralOperator extends DBSPUnaryOperator {
+public final class DBSPDelayedIntegralOperator extends DBSPUnaryOperator {
     public DBSPDelayedIntegralOperator(CalciteObject node, DBSPOperator source) {
         super(node, "delay_trace", null, source.outputType, source.isMultiset, source);
     }

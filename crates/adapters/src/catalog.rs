@@ -4,15 +4,19 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use crate::{static_compile::DeScalarHandle, ControllerError};
 use anyhow::Result as AnyResult;
+#[cfg(feature = "with-avro")]
+use apache_avro::{types::Value as AvroValue, Schema as AvroSchema};
+use arrow::record_batch::RecordBatch;
 use dbsp::{utils::Tup2, InputHandle};
 use pipeline_types::format::json::JsonFlavor;
 use pipeline_types::program_schema::canonical_identifier;
 use pipeline_types::program_schema::Relation;
 use pipeline_types::query::OutputQuery;
+use pipeline_types::serde_with_context::SqlSerdeConfig;
 use pipeline_types::serialize_struct;
 use serde::{Deserialize, Serialize};
 use serde_arrow::schema::SerdeArrowSchema;
-use serde_arrow::ArrowBuilder;
+use serde_arrow::ArrayBuilder;
 
 /// Descriptor that specifies the format in which records are received
 /// or into which they should be encoded before sending.
@@ -27,6 +31,8 @@ pub enum RecordFormat {
     Json(JsonFlavor),
     Csv,
     Parquet(SerdeArrowSchema),
+    #[cfg(feature = "with-avro")]
+    Avro,
 }
 
 // Helper type only used to serialize neighborhoods as a map vs tuple.
@@ -140,6 +146,16 @@ pub trait DeCollectionStream: Send {
     fn fork(&self) -> Box<dyn DeCollectionStream>;
 }
 
+pub trait ArrowStream: Send {
+    fn insert(&mut self, data: &RecordBatch) -> AnyResult<()>;
+
+    fn delete(&mut self, data: &RecordBatch) -> AnyResult<()>;
+
+    /// Create a new deserializer with the same configuration connected to
+    /// the same input stream.
+    fn fork(&self) -> Box<dyn ArrowStream>;
+}
+
 /// A handle to an input collection that can be used to feed serialized data
 /// to the collection.
 pub trait DeCollectionHandle: Send {
@@ -149,6 +165,11 @@ pub trait DeCollectionHandle: Send {
         &self,
         record_format: RecordFormat,
     ) -> Result<Box<dyn DeCollectionStream>, ControllerError>;
+
+    fn configure_arrow_deserializer(
+        &self,
+        config: SqlSerdeConfig,
+    ) -> Result<Box<dyn ArrowStream>, ControllerError>;
 }
 
 /// A type-erased batch whose contents can be serialized.
@@ -230,7 +251,7 @@ pub trait SerBatch: SerBatchReader + Send + Sync {
     fn merge(self: Arc<Self>, other: Vec<Arc<dyn SerBatch>>) -> Arc<dyn SerBatch>;
 
     /// Convert batch into a trace with identical contents.
-    fn into_trace(self: Arc<Self>, persistent_id: &str) -> Box<dyn SerTrace>;
+    fn into_trace(self: Arc<Self>) -> Box<dyn SerTrace>;
 
     fn as_batch_reader(&self) -> &dyn SerBatchReader;
 }
@@ -263,7 +284,11 @@ pub trait SerCursor {
     fn serialize_key(&mut self, dst: &mut Vec<u8>) -> AnyResult<()>;
 
     /// Serialize current key into arrow format. Panics if invalid.
-    fn serialize_key_to_arrow(&mut self, dst: &mut ArrowBuilder) -> AnyResult<()>;
+    fn serialize_key_to_arrow(&mut self, dst: &mut ArrayBuilder) -> AnyResult<()>;
+
+    #[cfg(feature = "with-avro")]
+    /// Convert current key to an Avro value.
+    fn key_to_avro(&mut self, schema: &AvroSchema) -> AnyResult<AvroValue>;
 
     /// Serialize the `(key, weight)` tuple.
     ///
@@ -273,6 +298,10 @@ pub trait SerCursor {
 
     /// Serialize current value. Panics if invalid.
     fn serialize_val(&mut self, dst: &mut Vec<u8>) -> AnyResult<()>;
+
+    #[cfg(feature = "with-avro")]
+    /// Convert current value to Avro.
+    fn val_to_avro(&mut self, schema: &AvroSchema) -> AnyResult<AvroValue>;
 
     /// Returns the weight associated with the current key/value pair.
     fn weight(&mut self) -> i64;
@@ -367,16 +396,26 @@ impl<'a> SerCursor for CursorWithPolarity<'a> {
         self.cursor.serialize_key(dst)
     }
 
+    #[cfg(feature = "with-avro")]
+    fn key_to_avro(&mut self, schema: &AvroSchema) -> AnyResult<AvroValue> {
+        self.cursor.key_to_avro(schema)
+    }
+
     fn serialize_key_weight(&mut self, dst: &mut Vec<u8>) -> AnyResult<()> {
         self.cursor.serialize_key_weight(dst)
     }
 
-    fn serialize_key_to_arrow(&mut self, dst: &mut ArrowBuilder) -> AnyResult<()> {
+    fn serialize_key_to_arrow(&mut self, dst: &mut ArrayBuilder) -> AnyResult<()> {
         self.cursor.serialize_key_to_arrow(dst)
     }
 
     fn serialize_val(&mut self, dst: &mut Vec<u8>) -> AnyResult<()> {
         self.cursor.serialize_val(dst)
+    }
+
+    #[cfg(feature = "with-avro")]
+    fn val_to_avro(&mut self, schema: &AvroSchema) -> AnyResult<AvroValue> {
+        self.cursor.val_to_avro(schema)
     }
 
     fn weight(&mut self) -> i64 {

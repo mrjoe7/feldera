@@ -1,14 +1,14 @@
+use crate::transport::InputEndpoint;
 use crate::{
     transport::{
         kafka::{rdkafka_loglevel_from, refine_kafka_error, DeferredLogging},
         secret_resolver::MaybeSecret,
         InputReader, Step,
     },
-    InputConsumer, InputEndpoint, PipelineState,
+    InputConsumer, PipelineState, TransportInputEndpoint,
 };
 use anyhow::{anyhow, bail, Error as AnyError, Result as AnyResult};
 use crossbeam::queue::ArrayQueue;
-use log::debug;
 use num_traits::FromPrimitive;
 use pipeline_types::{secret_ref::MaybeSecretRef, transport::kafka::KafkaInputConfig};
 use rdkafka::config::RDKafkaLogLevel;
@@ -19,6 +19,7 @@ use rdkafka::{
     ClientConfig, ClientContext, Message,
 };
 use std::{
+    collections::HashSet,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Mutex, Weak,
@@ -26,6 +27,7 @@ use std::{
     thread::spawn,
     time::{Duration, Instant},
 };
+use tracing::debug;
 
 const POLL_TIMEOUT: Duration = Duration::from_millis(100);
 
@@ -275,6 +277,7 @@ impl KafkaInputReader {
 
     fn worker_thread(endpoint: Arc<KafkaInputReaderInner>, mut consumer: Box<dyn InputConsumer>) {
         let mut actual_state = PipelineState::Paused;
+        let mut partition_eofs = HashSet::new();
         loop {
             // endpoint.debug_consumer();
             match endpoint.state() {
@@ -307,6 +310,24 @@ impl KafkaInputReader {
             match endpoint.kafka_consumer.poll(POLL_TIMEOUT) {
                 None => {
                     // println!("poll returned None");
+                }
+                Some(Err(KafkaError::PartitionEOF(p))) => {
+                    partition_eofs.insert(p);
+
+                    // If all the partitions we're subscribed to have received
+                    // an EOF, then we're done.
+                    if endpoint
+                        .kafka_consumer
+                        .assignment()
+                        .unwrap_or_default()
+                        .elements()
+                        .iter()
+                        .map(|tpl| tpl.partition())
+                        .all(|p| partition_eofs.contains(&p))
+                    {
+                        consumer.eoi();
+                        return;
+                    }
                 }
                 Some(Err(e)) => {
                     // println!("poll returned error");
@@ -342,16 +363,18 @@ impl KafkaInputReader {
 }
 
 impl InputEndpoint for KafkaInputEndpoint {
+    fn is_fault_tolerant(&self) -> bool {
+        false
+    }
+}
+
+impl TransportInputEndpoint for KafkaInputEndpoint {
     fn open(
         &self,
         consumer: Box<dyn InputConsumer>,
         _start_step: Step,
     ) -> AnyResult<Box<dyn InputReader>> {
         Ok(Box::new(KafkaInputReader::new(&self.config, consumer)?))
-    }
-
-    fn is_fault_tolerant(&self) -> bool {
-        false
     }
 }
 

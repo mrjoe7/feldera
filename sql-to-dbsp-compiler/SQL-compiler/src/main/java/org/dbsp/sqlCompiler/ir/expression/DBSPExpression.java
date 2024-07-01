@@ -23,7 +23,8 @@
 
 package org.dbsp.sqlCompiler.ir.expression;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.ir.DBSPNode;
 import org.dbsp.sqlCompiler.ir.DBSPParameter;
 import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
@@ -31,12 +32,13 @@ import org.dbsp.sqlCompiler.ir.expression.literal.DBSPBoolLiteral;
 import org.dbsp.sqlCompiler.ir.statement.DBSPExpressionStatement;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeResult;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeRef;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeResult;
 import org.dbsp.sqlCompiler.ir.type.IHasType;
 
 import javax.annotation.Nullable;
 
+/** Base class for all expressions */
 public abstract class DBSPExpression
         extends DBSPNode
         implements IHasType, IDBSPInnerNode {
@@ -47,11 +49,11 @@ public abstract class DBSPExpression
         this.type = type;
     }
 
-    /**
-     * Generates an expression that calls clone() on this.
-     */
+    /** Generates an expression that calls clone() on this. */
     public DBSPExpression applyClone() {
         assert !this.type.is(DBSPTypeRef.class): "Cloning a reference " + this;
+        if (this.is(DBSPCloneExpression.class))
+            return this;
         return new DBSPCloneExpression(this.getNode(), this);
     }
 
@@ -69,7 +71,7 @@ public abstract class DBSPExpression
     }
 
     /** Unwrap a Rust 'Result' type */
-    public DBSPExpression unwrap() {
+    public DBSPExpression resultUnwrap() {
         DBSPType resultType;
         if (this.type.is(DBSPTypeAny.class)) {
             resultType = this.type;
@@ -78,6 +80,12 @@ public abstract class DBSPExpression
             resultType = type.getTypeArg(0);
         }
         return new DBSPApplyMethodExpression(this.getNode(), "unwrap", resultType, this);
+    }
+
+    /** Unwrap an expression with a nullable type */
+    public DBSPExpression unwrap() {
+        assert this.type.mayBeNull;
+        return new DBSPUnwrapExpression(this);
     }
 
     public DBSPExpressionStatement toStatement() {
@@ -92,9 +100,9 @@ public abstract class DBSPExpression
         return new DBSPFieldExpression(this, index);
     }
 
-    /**
-     * Convenient shortcut to wrap an expression into a Some() constructor.
-     */
+    public DBSPExpression question() { return new DBSPQuestionExpression(this); }
+
+    /** Convenient shortcut to wrap an expression into a Some() constructor. */
     public DBSPExpression some() {
         return new DBSPSomeExpression(this.getNode(), this);
     }
@@ -109,6 +117,7 @@ public abstract class DBSPExpression
         return new DBSPIsNullExpression(this.getNode(), this);
     }
 
+    /** The exact same expression, using reference equality */
     public static boolean same(@Nullable DBSPExpression left, @Nullable DBSPExpression right) {
         if (left == null)
             return right == null;
@@ -137,14 +146,28 @@ public abstract class DBSPExpression
         return this.type.sameType(other.type);
     }
 
-    /**
-     * Make a deep copy of this expression.
-     */
+    /** Make a deep copy of this expression. */
     public abstract DBSPExpression deepCopy();
 
     public static @Nullable DBSPExpression nullableDeepCopy(@Nullable DBSPExpression expression) {
         if (expression == null)
             return null;
         return expression.deepCopy();
+    }
+
+    /** Check expressions for equivalence in a specified context.
+     * @param context Specifies variables that are renamed.
+     * @param other Expression to compare against.
+     * @return True if this expression is equivalent with 'other' in the specified context.
+     */
+    public abstract boolean equivalent(
+            EquivalenceContext context,
+            DBSPExpression other);
+
+    /** Check expressions without free variables for equivalence.
+     * @param other Expression to compare against.
+     * @return True if this expression is equivalent with 'other'. */
+    public boolean equivalent(DBSPExpression other) {
+        return EquivalenceContext.equiv(this, other);
     }
 }

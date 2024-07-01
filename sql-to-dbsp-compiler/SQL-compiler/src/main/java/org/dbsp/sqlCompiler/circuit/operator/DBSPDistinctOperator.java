@@ -23,13 +23,13 @@
 
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 
 import java.util.List;
 
-public class DBSPDistinctOperator extends DBSPUnaryOperator {
+public final class DBSPDistinctOperator extends DBSPUnaryOperator {
     public DBSPDistinctOperator(CalciteObject node, DBSPOperator input) {
         super(node, "distinct", null, input.outputType, false, input);
     }

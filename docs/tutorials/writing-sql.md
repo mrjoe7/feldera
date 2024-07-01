@@ -1,6 +1,6 @@
 # Your first SQL program
 
-Feldera Platform only supports two kinds of SQL Data Definition Language (DDL)
+Feldera only supports two kinds of SQL Data Definition Language (DDL)
 statements: table definitions, and view definitions. Each table definition
 becomes an input, and each view definition becomes an output. Here is an example
 program:
@@ -12,22 +12,22 @@ CREATE TABLE Person
     age     INT,
     present BOOLEAN
 );
-CREATE VIEW Adult AS SELECT Person.name, Person.age FROM Person WHERE Person.age > 18;
+CREATE MATERIALIZED VIEW Adult AS SELECT Person.name, Person.age FROM Person WHERE Person.age > 18;
 ```
 
 Statements need to be separated by semicolons.
 
 ## Incremental view maintenance
 
-The Feldera Platform is optimized for performing incremental view
-maintenance. In consequence, Feldera Platform programs in SQL are expressed as
+Feldera is optimized for performing incremental view
+maintenance. In consequence, Feldera programs in SQL are expressed as
 VIEWS, or *standing queries*.  A view is a virtual table that is
 formed by a query on other tables or views.
 
 For example, the following query defines a view:
 
 ```sql
-CREATE VIEW Adult AS SELECT Person.name FROM Person WHERE Person.age > 18
+CREATE MATERIALIZED VIEW Adult AS SELECT Person.name FROM Person WHERE Person.age > 18
 ```
 
 In order to interpret this query the compiler needs to have been given

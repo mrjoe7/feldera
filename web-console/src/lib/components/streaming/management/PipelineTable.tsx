@@ -38,23 +38,15 @@ import { format } from 'd3-format'
 import dayjs from 'dayjs'
 import Link from 'next/link'
 import React, { useCallback, useEffect, useState } from 'react'
-import CustomChip from 'src/@core/components/mui/chip'
+import { TwoSeventyRingWithBg } from 'react-svg-spinners'
+import { showOnHashPart } from 'src/lib/functions/urlHash'
 import invariant from 'tiny-invariant'
 import { match, P } from 'ts-pattern'
-import IconCalendar from '~icons/bx/calendar'
-import IconLogInCircle from '~icons/bx/log-in-circle'
-import IconPauseCircle from '~icons/bx/pause-circle'
-import IconPencil from '~icons/bx/pencil'
-import IconPlayCircle from '~icons/bx/play-circle'
-import IconShow from '~icons/bx/show'
-import IconStopCircle from '~icons/bx/stop-circle'
-import IconTrashAlt from '~icons/bx/trash-alt'
-import IconUpload from '~icons/bx/upload'
-import Icon270RingWithBg from '~icons/svg-spinners/270-ring-with-bg'
 
+import CustomChip from '@core/components/mui/chip'
 import { useLocalStorage } from '@mantine/hooks'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
-import { alpha, Button, Typography, useTheme } from '@mui/material'
+import { alpha, Button, ChipProps, Typography, useTheme } from '@mui/material'
 import Badge from '@mui/material/Badge'
 import Box from '@mui/material/Box'
 import Card from '@mui/material/Card'
@@ -76,15 +68,18 @@ import {
   GridRowId,
   GridRowProps,
   GridToolbarFilterButton,
-  GridValueSetterParams,
   useGridApiRef
 } from '@mui/x-data-grid-pro'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
+import { PipelineResourcesDialog } from './PipelineResourcesDialog'
+import { PipelineResourcesThumb } from './PipelineResourcesThumb'
 
 interface ConnectorData {
   relation: Relation
   connections: [AttachedConnector, ConnectorDescr][]
 }
+
 type InputOrOutput = 'input' | 'output'
 
 // Joins the relation with attached connectors and connectors and returns it as
@@ -149,111 +144,139 @@ const DetailPanelContent = (props: { row: Pipeline }) => {
         field: 'name',
         headerName: direction === 'input' ? 'Input' : 'Output',
         flex: 0.4,
-        renderCell: params => {
-          if (params.row.connections.length > 0) {
-            return params.row.connections.map(c => c[1].name).join(', ')
-          } else {
-            return <Box sx={{ fontStyle: 'italic' }}>No connection.</Box>
-          }
-        }
+        display: 'flex',
+        renderCell: params =>
+          params.row.connections.length > 0 ? (
+            params.row.connections.map(c => c[1].name).join(', ')
+          ) : (
+            <Box sx={{ fontStyle: 'italic' }}>No connection.</Box>
+          )
       },
       {
         field: 'config',
-        valueGetter: params => getCaseIndependentName(params.row.relation),
         headerName: direction === 'input' ? 'Table' : 'View',
-        flex: 0.6
+        flex: 0.6,
+        valueGetter: (_, row) => getCaseIndependentName(row.relation),
+        display: 'flex'
       },
       {
         field: 'records',
         headerName: 'Records',
         flex: 0.3,
-        renderCell: params => {
-          if (params.row.connections.length > 0) {
-            const records =
-              (direction === 'input'
-                ? metrics.input.get(getCaseIndependentName(params.row.relation))?.total_records
-                : metrics.output.get(getCaseIndependentName(params.row.relation))?.transmitted_records) || 0
-            return format(records >= 1000 ? '.3s' : '~s')(records)
-          } else {
-            // TODO: we need to count records also when relation doesn't have
-            // connections in the backend.
-            return '-'
-          }
-        }
+        display: 'flex',
+        renderCell: params =>
+          (() => {
+            if (params.row.connections.length > 0) {
+              const records =
+                (direction === 'input'
+                  ? metrics.input.get(getCaseIndependentName(params.row.relation))?.total_records
+                  : metrics.output.get(getCaseIndependentName(params.row.relation))?.transmitted_records) || 0
+              return format(records >= 1000 ? '.3s' : '~s')(records)
+            } else {
+              // TODO: we need to count records also when relation doesn't have
+              // connections in the backend.
+              return '-'
+            }
+          })()
       },
       {
         field: 'traffic',
         headerName: 'Traffic',
         flex: 0.15,
-        renderCell: params => {
-          const bytes =
-            direction === 'input'
-              ? metrics.input.get(getCaseIndependentName(params.row.relation))?.total_bytes
-              : metrics.output.get(getCaseIndependentName(params.row.relation))?.transmitted_bytes
-          return humanSize(bytes || 0)
-        }
+        display: 'flex',
+        renderCell: params =>
+          (() => {
+            const bytes =
+              direction === 'input'
+                ? metrics.input.get(getCaseIndependentName(params.row.relation))?.total_bytes
+                : metrics.output.get(getCaseIndependentName(params.row.relation))?.transmitted_bytes
+            return humanSize(bytes || 0)
+          })()
       },
       {
         field: 'errors',
         headerName: 'Errors',
         flex: 0.15,
-        renderCell: params => {
-          const errors =
-            direction === 'input'
-              ? (m => (m ? m.num_parse_errors + m.num_transport_errors : 0))(
-                  metrics.input.get(getCaseIndependentName(params.row.relation))
-                )
-              : (m => (m ? m.num_encode_errors + m.num_transport_errors : 0))(
-                  metrics.output.get(getCaseIndependentName(params.row.relation))
-                )
-          return (
-            <Box
-              sx={{
-                width: '100%',
-                height: '200%',
-                display: 'flex',
-                px: 2,
-                alignItems: 'center',
-                backgroundColor: errors > 0 ? alpha(theme.palette.warning.main, 0.5) : undefined
-              }}
-            >
-              {format(',')(errors)}
-            </Box>
-          )
-        }
+        display: 'flex',
+        renderCell: params =>
+          (() => {
+            const errors =
+              direction === 'input'
+                ? (m => (m ? m.num_parse_errors + m.num_transport_errors : 0))(
+                    metrics.input.get(getCaseIndependentName(params.row.relation))
+                  )
+                : (m => (m ? m.num_encode_errors + m.num_transport_errors : 0))(
+                    metrics.output.get(getCaseIndependentName(params.row.relation))
+                  )
+            return (
+              <Box
+                sx={{
+                  width: '100%',
+                  height: '200%',
+                  display: 'flex',
+                  px: 2,
+                  alignItems: 'center',
+                  backgroundColor: errors > 0 ? alpha(theme.palette.warning.main, 0.5) : undefined
+                }}
+              >
+                {format(',')(errors)}
+              </Box>
+            )
+          })()
       },
       {
         field: 'action',
         headerName: 'Action',
         flex: 0.15,
-        renderCell: params => (
-          <Box data-testid={`box-relation-actions-${params.row.relation.name}`}>
-            <Tooltip title={direction === 'input' ? 'Inspect Table' : 'Inspect View'}>
-              <IconButton
-                size='small'
-                href={`/streaming/inspection/?pipeline_name=${descriptor.name}&relation=${getCaseIndependentName(
-                  params.row.relation
-                )}`}
-                data-testid='button-inspect'
+        display: 'flex',
+        renderCell: params => {
+          const materialized = params.row.relation.materialized
+          return (
+            <Box data-testid={`box-relation-actions-${params.row.relation.name}`}>
+              <Tooltip
+                slotProps={{ tooltip: { sx: { fontSize: 14 } } }}
+                title={
+                  direction === 'input'
+                    ? materialized
+                      ? 'Inspect Table'
+                      : `Use 'CREATE TABLE (..) WITH ('materialized'='true')' syntax to enable browsing the table`
+                    : materialized
+                      ? 'Inspect View'
+                      : `Use 'CREATE MATERIALIZED VIEW' syntax to enable browsing the view`
+                }
               >
-                <IconShow fontSize={20} />
-              </IconButton>
-            </Tooltip>
-            {direction === 'input' && state.current_status == PipelineStatus.RUNNING && (
-              <Tooltip title='Import Data'>
                 <IconButton
                   size='small'
-                  href={`/streaming/inspection/?pipeline_name=${descriptor.name}&relation=${getCaseIndependentName(
-                    params.row.relation
-                  )}#insert`}
-                  data-testid='button-import'
+                  disableRipple={!materialized}
+                  sx={materialized ? {} : { cursor: 'default', color: 'text.disabled' }}
+                  href={
+                    materialized
+                      ? `/streaming/inspection/?pipeline_name=${descriptor.name}&relation=${getCaseIndependentName(
+                          params.row.relation
+                        )}`
+                      : ''
+                  }
+                  data-testid='button-inspect'
                 >
-                  <IconUpload fontSize={20} />
+                  <i className={'bx ' + (materialized ? 'bx-show' : 'bx-hide')} style={{ fontSize: 24 }} />
                 </IconButton>
               </Tooltip>
-            )}
-          </Box>
-        )
+              {direction === 'input' && state.current_status == PipelineStatus.RUNNING && (
+                <Tooltip slotProps={{ tooltip: { sx: { fontSize: 14 } } }} title='Import Data'>
+                  <IconButton
+                    size='small'
+                    href={`/streaming/inspection/?pipeline_name=${descriptor.name}&relation=${getCaseIndependentName(
+                      params.row.relation
+                    )}#insert`}
+                    data-testid='button-import'
+                  >
+                    <i className={`bx bx-download`} style={{ fontSize: 24 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+          )
+        }
       }
     ]
   }
@@ -290,7 +313,7 @@ const DetailPanelContent = (props: { row: Pipeline }) => {
                   <ListItem>
                     <Tooltip title='Pipeline Running Since'>
                       <ListItemIcon>
-                        <IconCalendar fontSize={20} />
+                        <i className={`bx bx-calendar`} style={{ fontSize: 24 }} />
                       </ListItemIcon>
                     </Tooltip>
                     <ListItemText
@@ -301,7 +324,7 @@ const DetailPanelContent = (props: { row: Pipeline }) => {
                   <ListItem>
                     <Tooltip title='Pipeline Port'>
                       <ListItemIcon>
-                        <IconLogInCircle fontSize={20} />
+                        <i className={`bx bx-log-in-circle`} style={{ fontSize: 24 }} />
                       </ListItemIcon>
                     </Tooltip>
                     <ListItemText
@@ -354,10 +377,7 @@ const DetailPanelContent = (props: { row: Pipeline }) => {
 }
 
 // Only show the details tab button if this pipeline has a revision
-function CustomDetailPanelToggle({
-  value: isExpanded,
-  row: row
-}: Pick<GridRenderCellParams<Pipeline>, 'value' | 'row'>) {
+function CustomDetailPanelToggleCell({ value: isExpanded, row: row }: GridRenderCellParams<Pipeline, boolean>) {
   const [hadRevision, setHadRevision] = useState<boolean>(false)
   const pipelineManagerQuery = usePipelineManagerQuery()
   const pipelineRevisionQuery = useQuery(pipelineManagerQuery.pipelineLastRevision(row.descriptor.name))
@@ -438,19 +458,21 @@ export default function PipelineTable() {
     ({ row }) => <DetailPanelContent row={row} />,
     []
   )
-  const columns: GridColDef[] = [
+  const columns: GridColDef<Pipeline>[] = [
     {
       ...GRID_DETAIL_PANEL_TOGGLE_COL_DEF,
-      renderCell: params => <CustomDetailPanelToggle value={params.value} row={params.row} />
+      display: 'flex',
+      renderCell: CustomDetailPanelToggleCell
     },
     {
       field: 'name',
       headerName: 'Name',
       editable: true,
-      flex: 2,
-      valueGetter: params => params.row.descriptor.name,
-      valueSetter: (params: GridValueSetterParams) => {
-        return { ...params.row, descriptor: { ...params.row.descriptor, name: params.value } }
+      flex: 0.3,
+      display: 'flex',
+      valueGetter: (_, row) => row.descriptor.name,
+      valueSetter: (value, row) => {
+        return { ...row, descriptor: { ...row.descriptor, name: value } }
       },
       renderCell: (params: GridRenderCellParams<Pipeline>) => (
         <Typography
@@ -477,31 +499,34 @@ export default function PipelineTable() {
       field: 'description',
       headerName: 'Description',
       editable: true,
-      flex: 3,
-      valueGetter: params => params.row.descriptor.description,
-      valueSetter: (params: GridValueSetterParams) => {
-        return { ...params.row, descriptor: { ...params.row.descriptor, description: params.value } }
+      type: 'string',
+      flex: 0.4,
+      display: 'flex',
+      valueGetter: (_, row) => row.descriptor.description,
+      valueSetter: (value, row) => {
+        return { ...row, descriptor: { ...row.descriptor, description: value } }
       }
     },
     {
       field: 'modification',
       headerName: 'Changes',
       width: 145,
-      renderCell: (params: GridRenderCellParams<Pipeline>) => {
-        return <PipelineRevisionStatusChip pipeline={params.row} />
-      }
+      display: 'flex',
+      renderCell: (params: GridRenderCellParams<Pipeline>) => <PipelineRevisionStatusChip pipeline={params.row} />
     },
     {
       field: 'status',
       headerName: 'Status',
       width: 145,
+      display: 'flex',
       renderCell: PipelineStatusCell
     },
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 120,
-      renderCell: PipelineActions
+      width: 150,
+      display: 'flex',
+      renderCell: PipelineActionsCell
     }
   ]
 
@@ -517,7 +542,11 @@ export default function PipelineTable() {
         request: {
           name: newRow.descriptor.name,
           description: newRow.descriptor.description,
-          program_name: newRow.descriptor.program_name
+          program_name: newRow.descriptor.program_name,
+          config: {
+            ...newRow.descriptor.config,
+            storage: newRow.descriptor.config.storage
+          }
         }
       },
       {
@@ -580,6 +609,7 @@ export default function PipelineTable() {
   const gridPersistence = useDataGridPresentationLocalStorage({
     key: LS_PREFIX + 'settings/streaming/management/grid'
   })
+  const showOnHash = showOnHashPart([hash, setHash])
 
   return (
     <Card>
@@ -588,7 +618,6 @@ export default function PipelineTable() {
         apiRef={apiRef}
         getRowId={(row: Pipeline) => row.descriptor.pipeline_id}
         columns={columns}
-        rowThreshold={0}
         getDetailPanelHeight={() => 'auto'}
         getDetailPanelContent={getDetailPanelContent}
         slots={{
@@ -623,6 +652,7 @@ export default function PipelineTable() {
         onDetailPanelExpandedRowIdsChange={updateExpandedRows}
         {...gridPersistence}
       />
+      <PipelineResourcesDialog {...showOnHash('configure')} pipelineName={hash.split('/')[1]} />
     </Card>
   )
 }
@@ -676,173 +706,129 @@ const PipelineStatusCell = (params: GridRenderCellParams<Pipeline>) => {
   const [status, programStatus] = usePipelineStatus(params)
 
   const shutdownPipelineClick = usePipelineMutation(mutationShutdownPipeline)
-  const testIdPrefix = `box-pipeline-${params.row.descriptor.name}-status-`
-  const chip = match([status, programStatus])
-    .with([PipelineStatus.UNKNOWN, P._], () => <CustomChip rounded size='small' skin='light' label={status} />)
-    .with([PipelineStatus.SHUTDOWN, 'NotReady'], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='primary'
-        label='Compiling'
-        data-testid={testIdPrefix + 'Compiling'}
-      />
-    ))
-    .with([PipelineStatus.SHUTDOWN, 'Pending'], () => (
-      <CustomChip rounded size='small' skin='light' color='info' label='Queued' data-testid={testIdPrefix + 'Queued'} />
-    ))
-    .with([PipelineStatus.SHUTDOWN, 'CompilingRust'], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='primary'
-        label='Compiling binary'
-        data-testid={testIdPrefix + 'Compiling binary'}
-      />
-    ))
-    .with([PipelineStatus.SHUTDOWN, 'Error'], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='error'
-        label='Program error'
-        data-testid={testIdPrefix + 'Program error'}
-      />
-    ))
-    .with([PipelineStatus.SHUTDOWN, 'NoProgram'], () => (
-      <Tooltip
-        title='A pipeline requires a program to be set in order to run. Please set one by editing the pipeline.'
-        disableInteractive
-      >
-        <CustomChip rounded size='small' skin='light' label='No program' data-testid={testIdPrefix + 'No program'} />
-      </Tooltip>
-    ))
-    .with([PipelineStatus.SHUTDOWN, 'Ready'], () => (
-      <CustomChip rounded size='small' skin='light' label='Ready to run' data-testid={testIdPrefix + 'Ready to run'} />
-    ))
-    .with([PipelineStatus.INITIALIZING, P._], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='secondary'
-        label={status}
-        data-testid={testIdPrefix + status}
-      />
-    ))
-    .with([PipelineStatus.PROVISIONING, P._], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='secondary'
-        label={status}
-        data-testid={testIdPrefix + status}
-      />
-    ))
-    .with([PipelineStatus.CREATE_FAILURE, P._], () => (
-      <CustomChip rounded size='small' skin='light' color='error' label={status} data-testid={testIdPrefix + status} />
-    ))
-    .with([PipelineStatus.STARTING, P._], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='secondary'
-        label={status}
-        data-testid={testIdPrefix + status}
-      />
-    ))
-    .with([PipelineStatus.STARTUP_FAILURE, P._], () => (
-      <CustomChip rounded size='small' skin='light' color='error' label={status} data-testid={testIdPrefix + status} />
-    ))
-    .with([PipelineStatus.RUNNING, P._], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='success'
-        label={status}
-        data-testid={testIdPrefix + status}
-      />
-    ))
-    .with([PipelineStatus.PAUSING, P._], () => (
-      <CustomChip rounded size='small' skin='light' color='info' label={status} data-testid={testIdPrefix + status} />
-    ))
-    .with([PipelineStatus.PAUSED, 'NotReady'], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='primary'
-        label='Compiling'
-        data-testid={testIdPrefix + 'Compiling'}
-      />
-    ))
-    .with([PipelineStatus.PAUSED, 'Pending'], () => (
-      <CustomChip rounded size='small' skin='light' color='info' label='Queued' data-testid={testIdPrefix + 'Queued'} />
-    ))
-    .with([PipelineStatus.PAUSED, 'CompilingRust'], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='primary'
-        label='Compiling binary'
-        data-testid={testIdPrefix + 'Compiling binary'}
-      />
-    ))
-    .with([PipelineStatus.PAUSED, 'Error'], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='error'
-        label='Program error'
-        data-testid={testIdPrefix + 'Program error'}
-      />
-    ))
-    .with([PipelineStatus.PAUSED, P._], () => (
-      <CustomChip rounded size='small' skin='light' color='info' label={status} data-testid={testIdPrefix + status} />
-    ))
-    .with([PipelineStatus.FAILED, P._], () => (
-      <Tooltip title={params.row.state.error?.message || 'Unknown Error'} disableInteractive>
-        <CustomChip
-          rounded
-          size='small'
-          skin='light'
-          color='error'
-          label={status}
-          onDelete={() => shutdownPipelineClick(params.row.descriptor.name)}
-          data-testid={testIdPrefix + status}
-        />
-      </Tooltip>
-    ))
-    .with([PipelineStatus.SHUTTING_DOWN, P._], () => (
-      <CustomChip
-        rounded
-        size='small'
-        skin='light'
-        color='secondary'
-        label={status}
-        data-testid={testIdPrefix + status}
-      />
-    ))
+  const testIdPrefix = `box-status-pipeline-${params.row.descriptor.name}-`
+  const chipProps = match([status, programStatus])
+    .returnType<ChipProps & { tooltip?: string }>()
+    .with([PipelineStatus.UNKNOWN, P._], () => ({ label: status }))
+    .with([PipelineStatus.SHUTDOWN, 'NotReady'], () => ({
+      color: 'primary',
+      label: 'Compiling',
+      'data-testid': testIdPrefix + 'Compiling'
+    }))
+    .with([PipelineStatus.SHUTDOWN, 'Pending'], () => ({
+      color: 'info',
+      label: 'Queued',
+      'data-testid': testIdPrefix + 'Queued'
+    }))
+    .with([PipelineStatus.SHUTDOWN, 'CompilingRust'], () => ({
+      color: 'primary',
+      label: 'Compiling bin',
+      'data-testid': testIdPrefix + 'Compiling binary'
+    }))
+    .with([PipelineStatus.SHUTDOWN, 'Error'], () => ({
+      color: 'error',
+      label: 'Program err',
+      'data-testid': testIdPrefix + 'Program error'
+    }))
+    .with([PipelineStatus.SHUTDOWN, 'NoProgram'], () => ({
+      tooltip: 'A pipeline requires a program to be set in order to run. Please set one by editing the pipeline.',
+      label: 'No program',
+      'data-testid': testIdPrefix + 'No program'
+    }))
+    .with([PipelineStatus.SHUTDOWN, 'Ready'], () => ({
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.INITIALIZING, P._], () => ({
+      color: 'secondary',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.PROVISIONING, P._], () => ({
+      color: 'secondary',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.CREATE_FAILURE, P._], () => ({
+      color: 'error',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.STARTING, P._], () => ({
+      color: 'secondary',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.STARTUP_FAILURE, P._], () => ({
+      color: 'error',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.RUNNING, P._], () => ({
+      color: 'success',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.PAUSING, P._], () => ({
+      color: 'info',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.PAUSED, 'NotReady'], () => ({
+      color: 'primary',
+      label: 'Compiling',
+      'data-testid': testIdPrefix + 'Compiling'
+    }))
+    .with([PipelineStatus.PAUSED, 'Pending'], () => ({
+      color: 'info',
+      label: 'Queued',
+      'data-testid': testIdPrefix + 'Queued'
+    }))
+    .with([PipelineStatus.PAUSED, 'CompilingRust'], () => ({
+      color: 'primary',
+      label: 'Compiling bin',
+      'data-testid': testIdPrefix + 'Compiling binary'
+    }))
+    .with([PipelineStatus.PAUSED, 'Error'], () => ({
+      color: 'error',
+      label: 'Program err',
+      'data-testid': testIdPrefix + 'Program error'
+    }))
+    .with([PipelineStatus.PAUSED, P._], () => ({
+      color: 'info',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.FAILED, P._], () => ({
+      tooltip: params.row.state.error?.message || 'Unknown Error',
+      color: 'error',
+      label: status,
+      onDelete: () => shutdownPipelineClick(params.row.descriptor.name),
+      'data-testid': testIdPrefix + status
+    }))
+    .with([PipelineStatus.SHUTTING_DOWN, P._], () => ({
+      color: 'secondary',
+      label: status,
+      'data-testid': testIdPrefix + status
+    }))
     .exhaustive()
 
   return (
     <Badge badgeContent={(params.row as any).warn_cnt} color='warning'>
       <Badge badgeContent={(params.row as any).error_cnt} color='error'>
-        {chip}
+        {chipProps.tooltip ? (
+          <Tooltip title={chipProps.tooltip} disableInteractive>
+            <CustomChip rounded size='small' skin='light' sx={{ width: 125 }} {...chipProps} />
+          </Tooltip>
+        ) : (
+          <CustomChip rounded size='small' skin='light' sx={{ width: 125 }} {...chipProps} />
+        )}
       </Badge>
     </Badge>
   )
 }
 
-const PipelineActions = (params: { row: Pipeline }) => {
+const PipelineActionsCell = (params: { row: Pipeline }) => {
   const pipeline = params.row.descriptor
 
   const [status, programStatus] = usePipelineStatus(params)
@@ -863,21 +849,21 @@ const PipelineActions = (params: { row: Pipeline }) => {
           onClick={() => pausePipelineClick(pipeline.name)}
           data-testid='button-pause'
         >
-          <IconPauseCircle fontSize={20} />
+          <i className={`bx bx-pause-circle`} style={{ fontSize: 24 }} />
         </IconButton>
       </Tooltip>
     ),
     start: () => (
       <Tooltip title='Start Pipeline' key='start'>
         <IconButton size='small' onClick={() => startPipelineClick(pipeline.name)} data-testid='button-start'>
-          <IconPlayCircle fontSize={20} />
+          <i className={`bx bx-play-circle`} style={{ fontSize: 24 }} />
         </IconButton>
       </Tooltip>
     ),
     spinner: () => (
       <Tooltip title={status} key='spinner'>
         <IconButton size='small'>
-          <Icon270RingWithBg fontSize={20} />
+          <TwoSeventyRingWithBg fontSize={20} color={'currentColor'} />
         </IconButton>
       </Tooltip>
     ),
@@ -889,14 +875,14 @@ const PipelineActions = (params: { row: Pipeline }) => {
           onClick={() => shutdownPipelineClick(pipeline.name)}
           data-testid='button-shutdown'
         >
-          <IconStopCircle fontSize={20} />
+          <i className={`bx bx-stop-circle`} style={{ fontSize: 24 }} />
         </IconButton>
       </Tooltip>
     ),
     inspect: () => (
       <Tooltip title='Inspect' key='inspect'>
         <IconButton size='small' component={Link} href='#' data-testid='button-inspect'>
-          <IconShow fontSize={20} />
+          <i className={`bx bx-show`} style={{ fontSize: 24 }} />
         </IconButton>
       </Tooltip>
     ),
@@ -908,14 +894,13 @@ const PipelineActions = (params: { row: Pipeline }) => {
           href={`/streaming/builder/?pipeline_name=${pipeline.name}`}
           data-testid='button-edit'
         >
-          <IconPencil fontSize={20} />
+          <i className={`bx bx-pencil`} style={{ fontSize: 24 }} />
         </IconButton>
       </Tooltip>
     ),
     delete: () => (
       <Tooltip title='Delete Pipeline' key='delete'>
         <IconButton
-          className='deleteButton'
           size='small'
           onClick={showDeleteDialog(
             'Delete',
@@ -924,30 +909,41 @@ const PipelineActions = (params: { row: Pipeline }) => {
           )}
           data-testid='button-delete'
         >
-          <IconTrashAlt fontSize={20} />
+          <i className={`bx bx-trash-alt`} style={{ fontSize: 24 }} />
         </IconButton>
       </Tooltip>
     ),
     spacer: () => (
       <IconButton size='small' sx={{ opacity: 0 }} disabled key='spacer'>
-        <IconStopCircle fontSize={20} />
+        <i className={`bx bx-stop-circle`} style={{ fontSize: 24 }} />
       </IconButton>
+    ),
+    configure: () => (
+      <Tooltip
+        title={<PipelineResourcesThumb pipelineName={pipeline.name}></PipelineResourcesThumb>}
+        key='configure'
+        disableInteractive
+      >
+        <IconButton size='small' href={`#configure/${pipeline.name}`} onClick={() => {}}>
+          <i className='bx bx-cog' style={{ fontSize: 24 }} />
+        </IconButton>
+      </Tooltip>
     )
   }
 
   const enabled = match([status, programStatus])
     .returnType<(keyof typeof actions)[]>()
-    .with([PipelineStatus.SHUTDOWN, 'Ready'], () => ['start', 'edit', 'delete'])
-    .with([PipelineStatus.SHUTDOWN, P._], () => ['spacer', 'edit', 'delete'])
-    .with([PipelineStatus.PROVISIONING, P._], () => ['spinner', 'edit'])
-    .with([PipelineStatus.INITIALIZING, P._], () => ['spinner', 'edit'])
-    .with([PipelineStatus.STARTING, P._], () => ['spinner', 'edit'])
-    .with([PipelineStatus.RUNNING, P._], () => ['pause', 'edit', 'shutdown'])
-    .with([PipelineStatus.PAUSING, P._], () => ['spinner', 'edit'])
-    .with([PipelineStatus.PAUSED, 'Ready'], () => ['start', 'edit', 'shutdown'])
-    .with([PipelineStatus.SHUTTING_DOWN, P._], () => ['spinner', 'edit'])
-    .with([PipelineStatus.FAILED, P._], () => ['spacer', 'edit', 'shutdown'])
-    .otherwise(() => ['spacer', 'edit'])
+    .with([PipelineStatus.SHUTDOWN, 'Ready'], () => ['start', 'edit', 'configure', 'delete'])
+    .with([PipelineStatus.SHUTDOWN, P._], () => ['spacer', 'edit', 'configure', 'delete'])
+    .with([PipelineStatus.PROVISIONING, P._], () => ['spinner', 'edit', 'configure'])
+    .with([PipelineStatus.INITIALIZING, P._], () => ['spinner', 'edit', 'configure'])
+    .with([PipelineStatus.STARTING, P._], () => ['spinner', 'edit', 'configure'])
+    .with([PipelineStatus.RUNNING, P._], () => ['pause', 'edit', 'configure', 'shutdown'])
+    .with([PipelineStatus.PAUSING, P._], () => ['spinner', 'edit', 'configure'])
+    .with([PipelineStatus.PAUSED, 'Ready'], () => ['start', 'edit', 'configure', 'shutdown'])
+    .with([PipelineStatus.SHUTTING_DOWN, P._], () => ['spinner', 'edit', 'configure'])
+    .with([PipelineStatus.FAILED, P._], () => ['spacer', 'edit', 'configure', 'shutdown'])
+    .otherwise(() => ['spacer', 'edit', 'configure'])
 
   return <Box data-testid={`box-pipeline-actions-${pipeline.name}`}>{enabled.map(e => actions[e]())}</Box>
 }

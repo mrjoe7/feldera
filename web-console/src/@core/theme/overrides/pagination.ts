@@ -1,5 +1,4 @@
-import { hexToRGBA } from 'src/@core/utils/hex-to-rgba'
-
+import { hexToRGBA } from '@core/utils/hex-to-rgba'
 import { Theme } from '@mui/material/styles'
 
 const Pagination = (theme: Theme) => {
@@ -9,11 +8,11 @@ const Pagination = (theme: Theme) => {
         root: {
           '&.Mui-selected:not(.Mui-disabled):not(.MuiPaginationItem-textPrimary):not(.MuiPaginationItem-textSecondary):hover':
             {
-              backgroundColor: `rgba(${theme.palette.customColors.main}, 0.12)`
+              backgroundColor: hexToRGBA(theme.palette.customColors.main, 0.12)
             }
         },
         outlined: {
-          borderColor: `rgba(${theme.palette.customColors.main}, 0.22)`
+          borderColor: hexToRGBA(theme.palette.customColors.main, 0.22)
         },
         outlinedPrimary: {
           '&.Mui-selected': {

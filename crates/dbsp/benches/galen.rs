@@ -8,6 +8,7 @@ use dbsp::{
     mimalloc::MiMalloc,
     monitor::TraceMonitor,
     operator::CsvSource,
+    typed_batch::DynBatchReader,
     utils::{Tup2, Tup3},
     Circuit, OrdZSet, RootCircuit, Runtime, Stream,
 };
@@ -294,7 +295,8 @@ fn main() -> Result<()> {
                     .expect("failed to write csv record");
             }
         }
-    });
+    })
+    .expect("Initialize runtime succeeds");
 
     hruntime.join().map_err(|error| {
         if let Some(message) = error.downcast_ref::<&'static str>() {

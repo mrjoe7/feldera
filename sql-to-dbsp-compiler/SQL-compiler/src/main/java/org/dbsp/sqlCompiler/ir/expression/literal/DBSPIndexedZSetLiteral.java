@@ -2,13 +2,13 @@ package org.dbsp.sqlCompiler.ir.expression.literal;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
 import org.dbsp.sqlCompiler.compiler.errors.UnimplementedException;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.IDBSPContainer;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
 import org.dbsp.util.IIndentStream;
 
 import javax.annotation.Nullable;
@@ -19,7 +19,7 @@ import javax.annotation.Nullable;
  * Currently, we only support empty indexed zsets since we found no
  * need for other constants yet.
  */
-public class DBSPIndexedZSetLiteral extends DBSPLiteral implements IDBSPContainer {
+public final class DBSPIndexedZSetLiteral extends DBSPLiteral implements IDBSPContainer {
     public final DBSPTypeIndexedZSet indexedZSetType;
 
     public DBSPIndexedZSetLiteral(CalciteObject node, DBSPType type) {

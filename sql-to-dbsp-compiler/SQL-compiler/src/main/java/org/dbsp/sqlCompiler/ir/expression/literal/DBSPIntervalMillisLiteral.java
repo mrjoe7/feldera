@@ -23,18 +23,22 @@
 
 package org.dbsp.sqlCompiler.ir.expression.literal;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
+import org.dbsp.sqlCompiler.ir.type.IsIntervalLiteral;
+import org.dbsp.sqlCompiler.ir.type.IsNumericLiteral;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeMillisInterval;
 import org.dbsp.util.IIndentStream;
 
 import javax.annotation.Nullable;
 import java.util.Objects;
 
-public class DBSPIntervalMillisLiteral extends DBSPLiteral {
+public final class DBSPIntervalMillisLiteral
+        extends DBSPLiteral
+        implements IsNumericLiteral, IsIntervalLiteral {
     @Nullable public final Long value;
 
     public DBSPIntervalMillisLiteral() {
@@ -48,6 +52,12 @@ public class DBSPIntervalMillisLiteral extends DBSPLiteral {
 
     public DBSPIntervalMillisLiteral(long value, boolean mayBeNull) {
         this(CalciteObject.EMPTY, new DBSPTypeMillisInterval(CalciteObject.EMPTY, mayBeNull), value);
+    }
+
+    @Override
+    public boolean gt0() {
+        assert this.value != null;
+        return this.value > 0;
     }
 
     @Override
@@ -75,12 +85,19 @@ public class DBSPIntervalMillisLiteral extends DBSPLiteral {
 
     @Override
     public IIndentStream toString(IIndentStream builder) {
-        builder.append("(")
-                .append(this.type)
-                .append(")");
+        builder.append(this.type)
+                .append("::new(");
         if (this.value != null)
-            return builder.append(this.value.toString());
-        return builder.append("null");
+            return builder.append(this.value.toString())
+                    .append(")");
+        return builder.append("null)");
+    }
+
+    @Override
+    public IsIntervalLiteral multiply(long value) {
+        if (this.value == null)
+            return this;
+        return new DBSPIntervalMillisLiteral(Math.multiplyExact(this.value, value), this.isNull);
     }
 
     @Override

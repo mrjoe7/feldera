@@ -1,28 +1,14 @@
 name: feldera
 services:
-  db:
-    image: postgres
-    restart: always
-    environment:
-      POSTGRES_PASSWORD: postgres
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   pipeline-manager:
     tty: true
-    image: ghcr.io/feldera/pipeline-manager:${FELDERA_VERSION:-0.12.0}
+    image: ghcr.io/feldera/pipeline-manager:${FELDERA_VERSION:-0.19.0}
     ports:
       # If you change the host side of the port mapping here, don't forget to
       # also add a corresponding --allowed-origins argument to the pipeline
       # manager command below (e.g., --allowed-origins "http://localhost:xyz").
       # Otherwise, browsers will complain about CORS errors
       - "8080:8080"
-    depends_on:
-      db:
-        condition: service_healthy
     stop_grace_period: 0s
     environment:
       - RUST_BACKTRACE=1
@@ -39,8 +25,6 @@ services:
       #
       #- seccomp:seccomp.json
       - seccomp:unconfined
-    command:
-      - --db-connection-string=postgresql://postgres:postgres@db:5432
     healthcheck:
       # TODO: add `/status` endpoint.
       test:
@@ -53,7 +37,7 @@ services:
       retries: 5
 
   redpanda:
-    profiles: [ "demo", "debezium", "snowflake", "service-probe-demo" ]
+    profiles: [ "demo", "debezium", "snowflake", "demo-service-related" ]
     command:
       - redpanda
       - start
@@ -104,7 +88,7 @@ services:
       context: ../
       dockerfile: deploy/Dockerfile
       target: kafka-connect
-    image: ghcr.io/feldera/kafka-connect:${FELDERA_VERSION:-0.12.0}
+    image: ghcr.io/feldera/kafka-connect:${FELDERA_VERSION:-0.19.0}
     depends_on:
       redpanda:
         condition: service_healthy
@@ -134,7 +118,7 @@ services:
         condition: service_healthy
       redpanda:
         condition: service_healthy
-    image: ghcr.io/feldera/demo-container:${FELDERA_VERSION:-0.12.0}
+    image: ghcr.io/feldera/demo-container:${FELDERA_VERSION:-0.19.0}
     environment:
       - RUST_BACKTRACE=1
       - REDPANDA_BROKERS=redpanda:9092
@@ -156,7 +140,7 @@ services:
         condition: service_healthy
       connect:
         condition: service_healthy
-    image: ghcr.io/feldera/demo-container:${FELDERA_VERSION:-0.12.0}
+    image: ghcr.io/feldera/demo-container:${FELDERA_VERSION:-0.19.0}
     environment:
       - RUST_BACKTRACE=1
       - REDPANDA_BROKERS=redpanda:9092
@@ -186,18 +170,18 @@ services:
       - -c
       - "sleep 1 && env && cd demo/project_demo09-S3/ && python3 run.py --api-url http://pipeline-manager:8080"
 
-  service-probe-demo:
-    profiles: [ "service-probe-demo" ]
+  demo-service-related:
+    profiles: [ "demo-service-related" ]
     depends_on:
       pipeline-manager:
         condition: service_healthy
       redpanda:
         condition: service_healthy
-    image: ghcr.io/feldera/demo-container:${FELDERA_VERSION:-0.12.0}
+    image: ghcr.io/feldera/demo-container:${FELDERA_VERSION:-0.19.0}
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info
     command:
       - bash
       - -c
-      - "sleep 1 && cd demo/service-probe && python3 run.py --api-url http://pipeline-manager:8080"
+      - "sleep 1 && cd demo/service-probe && python3 run.py --api-url http://pipeline-manager:8080 && sleep 1 && cd ../simple-count && python3 run.py --api-url http://pipeline-manager:8080"

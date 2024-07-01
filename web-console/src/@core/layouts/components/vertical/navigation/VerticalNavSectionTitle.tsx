@@ -1,5 +1,5 @@
-import { NavSectionTitle } from 'src/@core/layouts/types'
-
+import { NavSectionTitle } from '@core/layouts/types'
+import { hexToRGBA } from '@core/utils/hex-to-rgba'
 import Divider from '@mui/material/Divider'
 import MuiListSubheader, { ListSubheaderProps } from '@mui/material/ListSubheader'
 import { styled, useTheme } from '@mui/material/styles'
@@ -44,7 +44,7 @@ const VerticalNavSectionTitle = (props: Props) => {
         py: 1.75,
         color: theme.palette.text.disabled,
         '& .MuiDivider-root:before, & .MuiDivider-root:after, & hr': {
-          borderColor: `rgba(${theme.palette.customColors.main}, 0.12)`
+          borderColor: hexToRGBA(theme.palette.customColors.main, 0.12)
         }
       }}
     >

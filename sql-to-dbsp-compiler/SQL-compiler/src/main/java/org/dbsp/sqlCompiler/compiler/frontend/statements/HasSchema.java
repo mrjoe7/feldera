@@ -2,35 +2,31 @@ package org.dbsp.sqlCompiler.compiler.frontend.statements;
 
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
-import org.dbsp.sqlCompiler.compiler.InputColumnMetadata;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.RelColumnMetadata;
 
+import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** An object that has a schema */
 public class HasSchema implements IHasSchema {
     final CalciteObject node;
     final String name;
     final List<RelColumnMetadata> columns;
-    final List<InputColumnMetadata> metadata;
     final boolean nameIsQuoted;
 
     public HasSchema(CalciteObject node, String name, boolean nameIsQuoted, RelDataType rowType) {
         this.node = node;
         this.name = name;
         this.columns = new ArrayList<>();
-        this.metadata = new ArrayList<>();
         this.nameIsQuoted = nameIsQuoted;
         for (RelDataTypeField field: rowType.getFieldList()) {
             RelColumnMetadata meta = new RelColumnMetadata(
                     CalciteObject.create(field.getType()),
-                    field,
-                    false,
-            true,
-                    null,
-                    null);
+                    field, false, true,
+                    null, null, null);
             this.columns.add(meta);
         }
     }
@@ -53,5 +49,11 @@ public class HasSchema implements IHasSchema {
     @Override
     public List<RelColumnMetadata> getColumns() {
         return this.columns;
+    }
+
+    @Nullable
+    @Override
+    public Map<String, String> getProperties() {
+        return null;
     }
 }

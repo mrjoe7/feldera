@@ -24,7 +24,7 @@
 package org.dbsp.sqlCompiler.compiler.sql.simple;
 
 import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.sql.BaseSQLTests;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
@@ -35,6 +35,7 @@ import org.dbsp.sqlCompiler.ir.expression.literal.DBSPVecLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPZSetLiteral;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeInteger;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeVec;
 import org.junit.Ignore;
 import org.junit.Test;
 
@@ -57,6 +58,27 @@ public class ArrayTests extends BaseSQLTests {
 
     private void testQuery(String statements, String query) {
         this.testQuery(statements, query, new InputOutputChangeStream());
+    }
+
+    @Test
+    public void issue1922() {
+        String statements = """
+                CREATE TYPE foo_struct AS (
+                        id bigint NOT NULL
+                    );
+                
+                create table bar (
+                        vals foo_struct ARRAY
+                    );""";
+        String query = "SELECT * FROM bar, UNNEST(bar.vals)";
+        DBSPTypeVec vecType = new DBSPTypeVec(new DBSPTypeTuple(
+                new DBSPTypeInteger(CalciteObject.EMPTY, 64, true, false)
+        ), true);
+        // null vector
+        Change input = new Change(new DBSPZSetLiteral(new DBSPTupleExpression(new DBSPVecLiteral(vecType, true))));
+        Change output = new Change();
+        InputOutputChangeStream stream = new InputOutputChangeStream().addPair(input, output);
+        this.testQuery(statements, query, stream);
     }
 
     @Test
@@ -263,7 +285,7 @@ public class ArrayTests extends BaseSQLTests {
         this.testQuery(ddl, query);
     }
 
-    @Test @Ignore("https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6228")
+    @Test
     public void test2DArrayElements() {
         String ddl = "CREATE TABLE ARR_TABLE (\n"
                 + "VALS INTEGER ARRAY ARRAY)";
@@ -279,11 +301,11 @@ public class ArrayTests extends BaseSQLTests {
                         new DBSPTupleExpression(
                                 new DBSPI32Literal(3, true),
                                 new DBSPI32Literal(2),
-                                new DBSPI32Literal(2))
+                                new DBSPI32Literal(2, true))
                 ))).toStream());
     }
 
-    @Test @Ignore("https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6227")
+    @Test
     public void testElementNull() {
         this.testQuery("", "SELECT ELEMENT(NULL)", new InputOutputChange(new Change(),
                 new Change(new DBSPZSetLiteral(
@@ -540,5 +562,18 @@ public class ArrayTests extends BaseSQLTests {
 
         this.testQuery(ddl, "SELECT ARRAY_MIN(val) FROM ARR_TBL",
                 new InputOutputChangeStream().addPair(new Change(input), new Change(result)));
+    }
+
+    @Test
+    public void testSafeOrdinal() {
+        String sql = """
+                SELECT a[SAFE_OFFSET(2)], a[SAFE_OFFSET(3)] FROM
+                (SELECT ARRAY[1, 2] a)""";
+        this.testQuery("", sql,
+                new InputOutputChangeStream().addPair(new Change(),
+                        new Change(new DBSPZSetLiteral(
+                                new DBSPTupleExpression(
+                                        new DBSPI32Literal(2, true),
+                                        new DBSPI32Literal())))));
     }
 }

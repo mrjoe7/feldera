@@ -7,8 +7,10 @@ use crate::{
     Controller, PipelineConfig,
 };
 use env_logger::Env;
-use log::info;
+use parquet::data_type::AsBytes;
 use proptest::prelude::*;
+use rdkafka::message::{BorrowedMessage, Header, Headers};
+use rdkafka::Message;
 use std::{
     io::Write,
     sync::{
@@ -18,6 +20,7 @@ use std::{
     thread::sleep,
     time::Duration,
 };
+use tracing::info;
 
 /// Wait to receive all records in `data` in the same order.
 fn wait_for_output_ordered(zset: &MockDeZSet<TestStruct, TestStruct>, data: &[Vec<TestStruct>]) {
@@ -26,7 +29,8 @@ fn wait_for_output_ordered(zset: &MockDeZSet<TestStruct, TestStruct>, data: &[Ve
     wait(
         || zset.state().flushed.len() == num_records,
         DEFAULT_TIMEOUT_MS,
-    );
+    )
+    .unwrap();
 
     for (i, val) in data.iter().flat_map(|data| data.iter()).enumerate() {
         assert_eq!(zset.state().flushed[i].unwrap_insert(), val);
@@ -40,7 +44,8 @@ fn wait_for_output_unordered(zset: &MockDeZSet<TestStruct, TestStruct>, data: &[
     wait(
         || zset.state().flushed.len() == num_records,
         DEFAULT_TIMEOUT_MS,
-    );
+    )
+    .unwrap();
 
     let mut data_sorted = data
         .iter()
@@ -104,7 +109,7 @@ outputs:
     let config: PipelineConfig = serde_yaml::from_str(config_str).unwrap();
 
     match Controller::with_config(
-        |workers| Ok(test_circuit(workers)),
+        |workers| Ok(test_circuit::<TestStruct>(workers, &TestStruct::schema())),
         &config,
         Box::new(|e| panic!("error: {e}")),
     ) {
@@ -175,7 +180,7 @@ outputs:
     let test_name_clone = test_name.to_string();
 
     let controller = Controller::with_config(
-        |workers| Ok(test_circuit(workers)),
+        |workers| Ok(test_circuit::<TestStruct>(workers, &TestStruct::schema())),
         &config,
         Box::new(move |e| if running_clone.load(Ordering::Acquire) {
             panic!("{test_name_clone}: error: {e}")
@@ -185,7 +190,7 @@ outputs:
     )
     .unwrap();
 
-    let buffer_consumer = BufferConsumer::new(&output_topic, format, format_config);
+    let buffer_consumer = BufferConsumer::new(&output_topic, format, format_config, None);
 
     info!("{test_name}: Sending inputs");
     let producer = TestProducer::new();
@@ -389,12 +394,17 @@ outputs:
                 topic: {output_topic}
                 max_inflight_messages: 0
                 message.max.bytes: "1000000"
+                headers:
+                    - key: header1
+                      value: "foobar"
+                    - key: header2
+                      value: [1,2,3,4,5]
         format:
             name: csv
             config:
-        enable_buffer: true
-        max_buffer_size_records: {buffer_size}
-        max_buffer_time_millis: {buffer_timeout_ms}
+        enable_output_buffer: true
+        max_output_buffer_size_records: {buffer_size}
+        max_output_buffer_time_millis: {buffer_timeout_ms}
 "#
     );
 
@@ -407,7 +417,7 @@ outputs:
     let running_clone = running.clone();
 
     let controller = Controller::with_config(
-        |workers| Ok(test_circuit(workers)),
+        |workers| Ok(test_circuit::<TestStruct>(workers, &TestStruct::schema())),
         &config,
         Box::new(move |e| if running_clone.load(Ordering::Acquire) {
             panic!("buffer_test: error: {e}")
@@ -417,7 +427,25 @@ outputs:
     )
         .unwrap();
 
-    let buffer_consumer = BufferConsumer::new(&output_topic, "csv", "");
+    let cb = Box::new(|message: &BorrowedMessage| {
+        let headers = message.headers().unwrap();
+        assert_eq!(headers.count(), 2);
+        assert_eq!(
+            headers.try_get(0).unwrap(),
+            Header {
+                key: "header1",
+                value: Some(b"foobar".as_bytes())
+            }
+        );
+        assert_eq!(
+            headers.try_get(1).unwrap(),
+            Header {
+                key: "header2",
+                value: Some([1u8, 2, 3, 4, 5].as_bytes())
+            }
+        );
+    });
+    let buffer_consumer = BufferConsumer::new(&output_topic, "csv", "", Some(cb));
 
     info!("buffer_test: Sending inputs");
     let producer = TestProducer::new();

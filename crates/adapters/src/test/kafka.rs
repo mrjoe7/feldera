@@ -7,9 +7,9 @@ use anyhow::{anyhow, bail, Result as AnyResult};
 use csv::WriterBuilder as CsvWriterBuilder;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
-use log::{error, info};
 use pipeline_types::program_schema::Relation;
 use pipeline_types::transport::kafka::default_redpanda_server;
+use rdkafka::message::BorrowedMessage;
 use rdkafka::{
     admin::{AdminClient, AdminOptions, NewPartitions, NewTopic, TopicReplication},
     client::{Client, DefaultClientContext},
@@ -28,6 +28,7 @@ use std::{
     thread::{sleep, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tracing::{error, info};
 
 static MAX_TOPIC_PROBE_TIMEOUT: Duration = Duration::from_millis(20_000);
 
@@ -230,7 +231,12 @@ impl Drop for BufferConsumer {
 }
 
 impl BufferConsumer {
-    pub fn new(topic: &str, format: &str, format_config_yaml: &str) -> Self {
+    pub fn new(
+        topic: &str,
+        format: &str,
+        format_config_yaml: &str,
+        message_cb: Option<Box<dyn Fn(&BorrowedMessage) + Send>>,
+    ) -> Self {
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let shutdown_flag_clone = shutdown_flag.clone();
 
@@ -239,7 +245,7 @@ impl BufferConsumer {
         let buffer = MockDeZSet::new();
 
         // Input parsers don't care about schema yet.
-        let schema = Relation::new("mock_schema", false, vec![]);
+        let schema = Relation::new("mock_schema", false, vec![], false);
 
         let mut parser = format
             .new_parser(
@@ -287,6 +293,9 @@ impl BufferConsumer {
                         Some(Ok(message)) => {
                             // println!("received {} bytes", message.payload().unwrap().len());
                             // message.payload().map(|payload| consumer.input(payload));
+                            if let Some(cb) = &message_cb {
+                                cb(&message)
+                            };
 
                             if let Some(payload) = message.payload() {
                                 parser.input_chunk(payload);
@@ -333,7 +342,8 @@ impl BufferConsumer {
                 n == num_records
             },
             DEFAULT_TIMEOUT_MS,
-        );
+        )
+        .unwrap();
         //println!("{num_records} records received: {:?}",
         // received_data.lock().unwrap().iter().map(|r| r.id).collect::<Vec<_>>());
 

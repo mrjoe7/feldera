@@ -16,9 +16,15 @@ use std::{
     fmt::{Display, Error as FmtError, Formatter},
 };
 
+#[cfg(feature = "with-avro")]
+pub(crate) mod avro;
 pub(crate) mod csv;
 mod json;
-mod parquet;
+pub mod parquet;
+
+#[cfg(feature = "with-avro")]
+use crate::format::avro::output::AvroOutputFormat;
+pub use parquet::relation_to_parquet_schema;
 
 pub use self::csv::{byte_record_deserializer, string_record_deserializer};
 use self::{
@@ -31,7 +37,7 @@ use self::{
 /// duplicating the record `w` times, which is expensive
 /// for large weights (and is most likely not what the user
 /// intends).
-const MAX_DUPLICATES: i64 = 1_000_000;
+pub const MAX_DUPLICATES: i64 = 1_000_000;
 
 /// When including a long JSON record in an error message,
 /// truncate it to `MAX_RECORD_LEN_IN_ERRMSG` bytes.
@@ -335,6 +341,8 @@ static OUTPUT_FORMATS: Lazy<BTreeMap<&'static str, Box<dyn OutputFormat>>> = Laz
             "parquet",
             Box::new(ParquetOutputFormat) as Box<dyn OutputFormat>,
         ),
+        #[cfg(feature = "with-avro")]
+        ("avro", Box::new(AvroOutputFormat) as Box<dyn OutputFormat>),
     ])
 });
 

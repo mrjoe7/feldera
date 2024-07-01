@@ -1,12 +1,12 @@
 # Comparative Benchmarking
 
-It's useful for comparative purposes to be able to run the same
-benchmark on DBSP and other systems.  The `run-nexmark.sh` script in
-this directory supports running the
-[Nexmark](https://datalab.cs.pdx.edu/niagara/NEXMark/) benchmarks in
-comparable ways across a few different systems, currently:
+It's useful to be able to run the same benchmark on Feldera and other
+systems.  The `run-nexmark.sh` script in this directory supports
+running the [Nexmark](https://datalab.cs.pdx.edu/niagara/NEXMark/)
+benchmarks in comparable ways across a few different systems,
+currently:
 
-  * DBSP.
+  * Feldera.
 
   * Flink.
 
@@ -20,7 +20,7 @@ options are:
 
   * The underlying system to use, with `--runner`:
 
-    - `--runner=dbsp` for DBSP.
+    - `--runner=feldera` for Feldera.
 
 	- `--runner=flink` for standalone Flink.
 
@@ -51,7 +51,7 @@ options are:
     formulated that way.
 
   * Set the number of cores to use with `--cores`.  The default is
-    however many cores your system has, but no more than 16.  DBSP
+    however many cores your system has, but no more than 16.  Feldera
     uses the exact number of cores specified; some of the other
     runners only approximate the number of cores.
 
@@ -69,9 +69,40 @@ options, or you can use `suite.mk`, which is a wrapper around
 
 # Setting up the runners
 
-## DBSP setup
+## Feldera setup
 
-`run-nexmark.sh` supports DBSP without special setup.
+`run-nexmark.sh` supports Feldera for the Nexmark benchmarks
+implemented in Rust (the default) and SQL.  The Rust implementation is
+more mature and more complete than the SQL implementation.
+
+## Feldera setup for SQL
+
+To use `run-nexmark.sh` for the SQL implementation of Nexmark with
+Feldera, first follow the instructions for step 1 in
+`feldera-sql/README.md`, that is, start Kafka (or Redpanda) and the
+Feldera pipeline manager.  If you start them as suggested there, then
+nothing additional is needed; otherwise, you might need to use
+`--kafka-broker` and `--api-url` to tell `run-nexmark.sh` where to
+find them.
+
+The first time you run `run-nexmark.sh` for a given number of events
+with a particular Kafka broker, the script will generate that number
+of events into the Kafka broker, which can take a while.  Afterward,
+subsequent runs with the same broker and event count will run faster.
+
+## Feldera setup for Rust
+
+The Rust implementation does not need special setup.
+
+Feldera uses temporary files for storage, by default in `/tmp`.  If
+`/tmp` is `tmpfs`, as is the default on Fedora and some other
+distributions, then these files will really be written into memory.
+In that case, consider setting `TMPDIR` in the environment to a
+directory on a real filesystem, e.g.:
+
+```
+TMPDIR=/var/run ./run-nexmark.sh
+```
 
 ## Flink setup
 
@@ -88,7 +119,7 @@ To use `run-nexmark.sh` with Beam, first follow the instructions for
 building Nexmark in `beam/README.md`.  This can be as simple as:
 
 ```
-(cd flink && ./setup.sh)
+(cd beam && ./setup.sh)
 ```
 
 ### Google Cloud Dataflow on Beam
@@ -187,43 +218,47 @@ The following table, produced using `suite.mk` and `analysis.sps`,
 shows results obtained on one particular system:
 
 ```
-                         16-core Nexmark Streaming Performance
-╭────────┬───────────────────────────────────────────────────────────────────────────╮
-│        │                                   runner                                  │
-│        ├─────────┬─────────┬──────────────────────────┬────────────────────────────┤
-│        │   DBSP  │  Flink  │       Flink on Beam      │      Dataflow on Beam      │
-│        ├─────────┼─────────┼──────────────────────────┼────────────────────────────┤
-│        │ language│ language│         language         │          language          │
-│        ├─────────┼─────────┼────────┬────────┬────────┼─────────┬─────────┬────────┤
-│        │ default │ default │ default│   SQL  │ ZetaSQL│ default │   SQL   │ ZetaSQL│
-│        ├─────────┼─────────┼────────┼────────┼────────┼─────────┼─────────┼────────┤
-│        │ events/s│ events/s│events/s│events/s│events/s│ events/s│ events/s│events/s│
-│        ├─────────┼─────────┼────────┼────────┼────────┼─────────┼─────────┼────────┤
-│        │   Mean  │   Mean  │  Mean  │  Mean  │  Mean  │   Mean  │   Mean  │  Mean  │
-├────────┼─────────┼─────────┼────────┼────────┼────────┼─────────┼─────────┼────────┤
-│query 0 │9,926,544│1,889,538│ 283,366│ 225,276│ 208,986│  697,837│  679,810│ 197,746│
-│      1 │9,942,334│  516,358│ 316,056│ 305,904│        │1,023,541│  819,001│        │
-│      2 │9,927,529│1,834,189│ 517,331│ 500,250│ 417,014│1,824,818│1,773,050│ 329,598│
-│      3 │9,936,407│  617,623│ 555,247│ 415,455│ 402,414│  793,651│  694,444│ 413,394│
-│      4 │9,768,487│  423,881│  93,712│        │        │   63,068│         │        │
-│      5 │9,906,875│  362,190│ 251,699│        │        │  114,758│         │        │
-│      6 │9,829,942│         │  88,488│        │        │   63,577│         │        │
-│      7 │7,380,618│  208,461│ 194,970│  68,069│        │  102,491│    5,518│        │
-│      8 │9,380,863│  532,430│ 396,511│        │        │  418,760│         │        │
-│      9 │2,107,437│  205,650│  88,715│        │        │   69,701│         │        │
-│      10│         │         │ 199,681│        │        │  106,758│         │        │
-│      11│         │  509,767│ 194,326│        │        │   83,731│         │        │
-│      12│9,134,088│  753,699│ 365,631│        │        │  176,149│         │        │
-│      13│5,778,009│  584,037│ 225,734│ 141,844│ 134,445│1,002,004│  564,016│ 110,681│
-│      14│9,928,515│  539,046│ 200,803│        │        │  108,319│         │        │
-│      15│8,911,862│  431,345│        │        │        │         │         │        │
-│      16│3,094,251│  236,567│ 339,443│        │        │  208,030│         │        │
-│      17│7,127,076│1,382,246│        │        │        │         │         │        │
-│      18│3,377,351│1,079,844│        │        │        │         │         │        │
-│      19│2,732,390│  556,923│        │        │        │         │         │        │
-│      20│3,444,356│  367,674│        │        │        │         │         │        │
-│      21│9,760,859│  780,567│        │        │        │         │         │        │
-│      22│9,935,420│  433,862│        │        │        │         │         │        │
-╰────────┴─────────┴─────────┴────────┴────────┴────────┴─────────┴─────────┴────────╯
+                              16-core Nexmark Streaming Performance
+╭────────┬─────────────────────────────────────────────────────────────────────────────────────╮
+│        │                                        runner                                       │
+│        ├─────────┬───────────────────┬──────────────────────────┬────────────────────────────┤
+│        │ Feldera │       Flink       │       Flink on Beam      │      Dataflow on Beam      │
+│        ├─────────┼───────────────────┼──────────────────────────┼────────────────────────────┤
+│        │   mode  │        mode       │           mode           │            mode            │
+│        ├─────────┼─────────┬─────────┼──────────────────────────┼────────────────────────────┤
+│        │  stream │  batch  │  stream │          stream          │           stream           │
+│        ├─────────┼─────────┼─────────┼──────────────────────────┼────────────────────────────┤
+│        │ language│ language│ language│         language         │          language          │
+│        ├─────────┼─────────┼─────────┼────────┬────────┬────────┼─────────┬─────────┬────────┤
+│        │ default │ default │ default │ default│   SQL  │ ZetaSQL│ default │   SQL   │ ZetaSQL│
+│        ├─────────┼─────────┼─────────┼────────┼────────┼────────┼─────────┼─────────┼────────┤
+│        │ events/s│ events/s│ events/s│events/s│events/s│events/s│ events/s│ events/s│events/s│
+│        ├─────────┼─────────┼─────────┼────────┼────────┼────────┼─────────┼─────────┼────────┤
+│        │   Mean  │   Mean  │   Mean  │  Mean  │  Mean  │  Mean  │   Mean  │   Mean  │  Mean  │
+├────────┼─────────┼─────────┼─────────┼────────┼────────┼────────┼─────────┼─────────┼────────┤
+│query 0 │6,973,987│2,701,024│2,642,776│ 283,366│ 225,276│ 208,986│  697,837│  679,810│ 197,746│
+│      1 │6,595,871│2,417,737│2,604,438│ 316,056│ 305,904│        │1,023,541│  819,001│        │
+│      2 │6,748,549│3,176,519│3,122,073│ 517,331│ 500,250│ 417,014│1,824,818│1,773,050│ 329,598│
+│      3 │6,608,075│2,089,078│2,039,692│ 555,247│ 415,455│ 402,414│  793,651│  694,444│ 413,394│
+│      4 │4,233,521│  499,072│  501,017│  93,712│        │        │   63,068│         │        │
+│      5 │6,589,786│  662,708│  661,901│ 251,699│        │        │  114,758│         │        │
+│      6 │3,997,921│         │         │  88,488│        │        │   63,577│         │        │
+│      7 │3,136,763│  283,085│  281,262│ 194,970│  68,069│        │  102,491│    5,518│        │
+│      8 │6,641,870│1,996,446│2,103,271│ 396,511│        │        │  418,760│         │        │
+│      9 │  910,680│  206,424│  209,547│  88,715│        │        │   69,701│         │        │
+│      10│         │         │         │ 199,681│        │        │  106,758│         │        │
+│      11│         │  541,202│  547,783│ 194,326│        │        │   83,731│         │        │
+│      12│6,682,259│1,939,488│2,002,162│ 365,631│        │        │  176,149│         │        │
+│      13│3,675,255│1,529,824│1,571,314│ 225,734│ 141,844│ 134,445│1,002,004│  564,016│ 110,681│
+│      14│6,858,711│2,247,191│2,191,541│ 200,803│        │        │  108,319│         │        │
+│      15│3,539,322│  947,679│  912,326│        │        │        │         │         │        │
+│      16│  810,701│  233,439│  233,294│ 339,443│        │        │  208,030│         │        │
+│      17│3,870,269│1,732,712│1,713,796│        │        │        │         │         │        │
+│      18│1,358,216│  499,176│  511,146│        │        │        │         │         │        │
+│      19│1,201,216│1,014,693│1,011,419│        │        │        │         │         │        │
+│      20│1,352,192│  269,199│  266,441│        │        │        │         │         │        │
+│      21│6,634,820│1,254,548│1,229,695│        │        │        │         │         │        │
+│      22│6,305,568│1,623,456│1,521,838│        │        │        │         │         │        │
+╰────────┴─────────┴─────────┴─────────┴────────┴────────┴────────┴─────────┴─────────┴────────╯
 Beam Spark performance omitted because Nexmark hangs in streaming mode.
 ```

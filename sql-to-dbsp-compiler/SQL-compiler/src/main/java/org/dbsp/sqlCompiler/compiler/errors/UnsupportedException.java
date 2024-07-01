@@ -25,7 +25,8 @@
 
 package org.dbsp.sqlCompiler.compiler.errors;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.IHasCalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 
 /**
  * Exception thrown when an unsupported construct is compiled.
@@ -39,7 +40,11 @@ public class UnsupportedException extends BaseCompilerException {
     }
 
     public UnsupportedException(String msg, CalciteObject obj) {
-        super(msg, obj);
+        super(msg + ": " + obj, obj);
+    }
+
+    public UnsupportedException(String msg, IHasCalciteObject obj) {
+        this(msg, obj.getNode());
     }
 
     @Override

@@ -397,20 +397,20 @@ Within a bracket expression, the name of a character class enclosed in
 class. A character class cannot be used as an endpoint of a range. The
 POSIX standard defines these character class names:
 
-|Class|Description|
-|-----|-----------|
-|`alnum`|letters and numeric digits
-|`alpha`|letters    |
-|`blank`|space and tab|
-|`cntrl`|control characters|
-|`digit`|numeric digits|
-|`graph`|printable characters except space|
-|`lower`|lower-case letters|
-|`print`|printable characters including space|
-|`punct`|punctuation|
-|`space`|any white space|
-|`upper`|upper-case letters|
-|`xdigit`|hexadecimal digits|
+|Class| Description                          |
+|-----|--------------------------------------|
+|`alnum`| letters and numeric digits           |           
+|`alpha`| letters                              |
+|`blank`| space and tab                        |
+|`cntrl`| control characters                   |
+|`digit`| numeric digits                       |
+|`graph`| printable characters except space    |
+|`lower`| lower-case letters                   |
+|`print`| printable characters including space |
+|`punct`| punctuation                          |
+|`space`| any white space                      |
+|`upper`| upper-case letters                   |
+|`xdigit`| hexadecimal digits                   |
 
 Class-shorthand escapes provide shorthands for certain commonly-used
 character classes. They are shown in the table below.

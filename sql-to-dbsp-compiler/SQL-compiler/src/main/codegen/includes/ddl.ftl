@@ -45,7 +45,7 @@ void ExtendedTableElement(List<SqlNode> list) :
         {
             strategy = nullable ? ColumnStrategy.NULLABLE : ColumnStrategy.NOT_NULLABLE;
             column = new SqlExtendedColumnDeclaration(s.add(id).end(this), id,
-                            type.withNullable(nullable), null, strategy, null, null, false, null);
+                            type.withNullable(nullable), null, strategy, null, null, false, null, null);
         }
         ( column = ColumnAttribute(column) )*
         {
@@ -75,7 +75,8 @@ SqlExtendedColumnDeclaration ColumnAttribute(SqlExtendedColumnDeclaration column
 {
     SqlIdentifier foreignKeyTable = null;
     SqlIdentifier foreignKeyColumn = null;
-    SqlNode latenes = null;
+    SqlNode lateness = null;
+    SqlNode watermark = null;
     SqlNode e;
     Span s;
 }
@@ -88,14 +89,34 @@ SqlExtendedColumnDeclaration ColumnAttribute(SqlExtendedColumnDeclaration column
                return column.setForeignKey(foreignKeyTable, foreignKeyColumn);
             }
         |
-            <LATENESS> latenes = Expression(ExprContext.ACCEPT_NON_QUERY) {
-               return column.setLatenes(latenes);
+            <LATENESS> lateness = Expression(ExprContext.ACCEPT_NON_QUERY) {
+               return column.setLatenes(lateness);
+            }
+        |
+            <WATERMARK> watermark = Expression(ExprContext.ACCEPT_NON_QUERY) {
+               return column.setWatermark(watermark);
             }
         |
             <DEFAULT_> e = Expression(ExprContext.ACCEPT_SUB_QUERY) {
                 return column.setDefault(e);
             }
         )
+}
+
+SqlNode LatenessStatement() :
+{
+    final SqlIdentifier view;
+    final SqlIdentifier column;
+    final SqlNode lateness;
+    Span s;
+}
+{
+    <LATENESS> { s = span(); } view = SimpleIdentifier()
+    <DOT> column = SimpleIdentifier()
+    lateness = Expression(ExprContext.ACCEPT_NON_QUERY)
+    {
+         return new SqlLateness(s.end(this), view, column, lateness);
+    }
 }
 
 SqlNodeList NonEmptyAttributeDefList() :
@@ -152,6 +173,33 @@ void AttributeDef(List<SqlNode> list) :
     }
 }
 
+SqlNodeList KeyValueList() :
+{
+    final Span s;
+    final List<SqlNode> list = new ArrayList<SqlNode>();
+}
+{
+    <LPAREN> { s = span(); }
+    KeyValue(list)
+    (
+        <COMMA> KeyValue(list)
+    )*
+    <RPAREN> {
+        return new SqlNodeList(list, s.end(this));
+    }
+}
+
+void KeyValue(List<SqlNode> list) :
+{
+    final SqlNode key;
+    final SqlNode value;
+}
+{
+    key = StringLiteral() { list.add(key); }
+    <EQ>
+    value = StringLiteral() { list.add(value); }
+}
+
 /** REMOVE FROM TABLE */
 SqlNode RemoveStatement() :
 {
@@ -193,6 +241,7 @@ SqlCreateFunctionDeclaration SqlCreateFunction(Span s, boolean replace) :
     final SqlNodeList parameters;
     final SqlDataTypeSpec type;
     final boolean nullable;
+    SqlNode body = null;
 }
 {
     <FUNCTION> ifNotExists = IfNotExistsOpt()
@@ -201,9 +250,10 @@ SqlCreateFunctionDeclaration SqlCreateFunction(Span s, boolean replace) :
     <RETURNS>
     type = DataType()
     nullable = NullableOptDefaultTrue()
+    [ <AS> body = OrderedQueryOrExpr(ExprContext.ACCEPT_NON_QUERY) ]
     {
         return new SqlCreateFunctionDeclaration(s.end(this), replace, ifNotExists,
-            id, parameters, type.withNullable(nullable));
+            id, parameters, type.withNullable(nullable), body);
     }
 }
 
@@ -231,16 +281,16 @@ SqlCreate SqlCreateExtendedTable(Span s, boolean replace) :
 {
     final boolean ifNotExists;
     final SqlIdentifier id;
-    SqlNodeList tableElementList = null;
-    SqlNode query = null;
+    SqlNodeList tableElementList;
+    SqlNodeList connector = null;
 }
 {
     <TABLE> ifNotExists = IfNotExistsOpt() id = CompoundIdentifier()
-    [ tableElementList = ExtendedTableElementList() ]
-    [ <AS> query = OrderedQueryOrExpr(ExprContext.ACCEPT_QUERY) ]
+    tableElementList = ExtendedTableElementList()
+    [ <WITH> connector = KeyValueList() ]
     {
-        return SqlDdlNodes.createTable(s.end(this), replace, ifNotExists, id,
-            tableElementList, query);
+        return new SqlCreateTable(s.end(this), replace, ifNotExists, id,
+            tableElementList, connector);
     }
 }
 
@@ -249,13 +299,17 @@ SqlCreate SqlCreateView(Span s, boolean replace) :
     final SqlIdentifier id;
     SqlNodeList columnList = null;
     final SqlNode query;
+    SqlCreateLocalView.ViewKind kind = SqlCreateLocalView.ViewKind.STANDARD;
+    SqlNodeList connector = null;
 }
 {
+    [ <LOCAL> { kind = SqlCreateLocalView.ViewKind.LOCAL; }
+    | <MATERIALIZED> { kind = SqlCreateLocalView.ViewKind.MATERIALIZED; } ]
     <VIEW> id = CompoundIdentifier()
     [ columnList = ParenthesizedSimpleIdentifierList() ]
+    [ <WITH> connector = KeyValueList() ]
     <AS> query = OrderedQueryOrExpr(ExprContext.ACCEPT_QUERY) {
-        return SqlDdlNodes.createView(s.end(this), replace, id, columnList,
-            query);
+        return new SqlCreateLocalView(s.end(this), replace, kind, id, columnList, connector, query);
     }
 }
 

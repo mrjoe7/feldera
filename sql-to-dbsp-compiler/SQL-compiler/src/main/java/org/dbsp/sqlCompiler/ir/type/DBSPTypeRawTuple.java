@@ -23,7 +23,7 @@
 
 package org.dbsp.sqlCompiler.ir.type;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -34,9 +34,7 @@ import org.dbsp.util.IIndentStream;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * A Raw Rust tuple.
- */
+/** A Raw Rust tuple. */
 public class DBSPTypeRawTuple extends DBSPTypeTupleBase {
     private DBSPTypeRawTuple(CalciteObject node, DBSPTypeCode code, boolean mayBeNull, DBSPType... tupArgs) {
         super(node, code, mayBeNull, tupArgs);
@@ -117,7 +115,7 @@ public class DBSPTypeRawTuple extends DBSPTypeTupleBase {
         DBSPTypeRawTuple tuple = to.to(DBSPTypeRawTuple.class);
         if (tuple.size() != this.size())
             return super.caster(to);  // throw
-        DBSPVariablePath var = new DBSPVariablePath("x", this.ref());
+        DBSPVariablePath var = this.ref().var();
         DBSPExpression[] casts = new DBSPExpression[this.tupFields.length];
         for (int i = 0; i < this.tupFields.length; i++) {
             casts[i] = this.tupFields[i].caster(tuple.tupFields[i]);

@@ -5,12 +5,68 @@ import {
   PipelineRuntimeState,
   RuntimeConfig
 } from '$lib/services/manager'
+import BigNumber from 'bignumber.js'
 
 export type ControllerStatus = {
-  global_config: RuntimeConfig
+  pipeline_config: RuntimeConfig
   global_metrics: GlobalMetrics
   inputs: InputEndpointStatus[]
   outputs: OutputEndpointStatus[]
+  metrics: ControllerMetric[]
+}
+
+type ControllerMetric = {
+  /// Metric name.
+  key: string
+
+  /// Optional key-value pairs that provide additional metadata about this
+  /// metric.
+  labels: [string, string][]
+
+  /// Unit of measure for this metric, if any.
+  unit?: MetricUnit
+
+  /// Optional natural language description of the metric.
+  description?: string
+
+  /// The metric's value.
+  value: MetricValue
+}
+
+type MetricUnit =
+  | 'count'
+  | 'percent'
+  | 'seconds'
+  | 'milliseconds'
+  | 'microseconds'
+  | 'nanoseconds'
+  | 'tebibytes'
+  | 'gigibytes'
+  | 'mebibytes'
+  | 'kibibytes'
+  | 'bytes'
+  | 'terabits_per_second'
+  | 'gigabits_per_second'
+  | 'megabits_per_second'
+  | 'kilobits_per_second'
+  | 'bits_per_second'
+  | 'count_per_second'
+
+type MetricValue =
+  | {
+      Counter: BigNumber
+    }
+  | { Gauge: number }
+  | { Histogram: HistogramValue }
+
+type HistogramValue = {
+  count: BigNumber
+  first: number
+  middle: number
+  last: number
+  minimum: number
+  maximum: number
+  mean: number
 }
 
 export interface GlobalConfig {
@@ -26,6 +82,7 @@ export interface GlobalMetrics {
   total_input_records: number
   total_processed_records: number
   pipeline_complete: boolean
+  state: 'Running' | string
 }
 
 export type GlobalMetricsTimestamp = GlobalMetrics & {
@@ -79,21 +136,21 @@ export enum PipelineStatus {
   // Maps to PipelineStatus.SHUTDOWN
   SHUTDOWN = 'Ready to run',
   // Maps to PipelineStatus.PROVISIONING
-  PROVISIONING = 'Provisioning …',
+  PROVISIONING = 'Provisioning',
   // Maps to PipelineStatus.INITIALIZING
-  INITIALIZING = 'Creating …',
+  INITIALIZING = 'Creating',
   CREATE_FAILURE = 'Create failed',
-  STARTING = 'Starting …',
-  STARTUP_FAILURE = 'Starting failed',
+  STARTING = 'Starting',
+  STARTUP_FAILURE = 'Start failed',
   // Maps to PipelineStatus.RUNNING
   RUNNING = 'Running',
-  PAUSING = 'Pausing …',
+  PAUSING = 'Pausing',
   // Maps to PipelineStatus.PAUSED
   PAUSED = 'Paused',
   // Maps to PipelineStatus.FAILED
   FAILED = 'Failed',
   // Maps to PipelineStatus.SHUTTING_DOWN
-  SHUTTING_DOWN = 'Shutting down …'
+  SHUTTING_DOWN = 'Shutting dwn'
 }
 
 export type PipelineWithStatus<Field extends string, Status> = Omit<RawPipeline, 'state'> & {

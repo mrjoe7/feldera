@@ -12,9 +12,7 @@ import java.io.File;
 import java.io.IOException;
 import java.sql.SQLException;
 
-/**
- * Parser tests that are expected to fail.
- */
+/** Parser tests that are expected to fail. */
 public class NegativeParserTests extends BaseSQLTests {
     @Override
     public CompilerOptions testOptions(boolean incremental, boolean optimize) {
@@ -32,7 +30,7 @@ public class NegativeParserTests extends BaseSQLTests {
                 )""";
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatement(ddl);
-        TestUtil.assertMessagesContain(compiler.messages, "does not correspond to a column");
+        TestUtil.assertMessagesContain(compiler, "does not correspond to a column");
     }
 
     @Test
@@ -43,7 +41,33 @@ public class NegativeParserTests extends BaseSQLTests {
                 """;
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatements(ddl);
-        TestUtil.assertMessagesContain(compiler.messages, "Duplicate declaration");
+        TestUtil.assertMessagesContain(compiler, "Duplicate declaration");
+    }
+
+    @Test
+    public void testConnectorProperties() {
+        String ddl = "CREATE TABLE T(T INT) WITH ( 5 )";
+        DBSPCompiler compiler = this.testCompiler();
+        compiler.compileStatement(ddl);
+        TestUtil.assertMessagesContain(compiler, "Error parsing SQL: Encountered \"5\" at");
+
+        // properties need to be SQL strings
+        ddl = "CREATE TABLE T(T INT) WITH ( a = b )";
+        compiler = this.testCompiler();
+        compiler.compileStatement(ddl);
+        TestUtil.assertMessagesContain(compiler, "Error parsing SQL: Encountered \"a\" at");
+
+        // properties need to be SQL strings
+        ddl = "CREATE TABLE T(T INT) WITH ( NULL = 'NULL' )";
+        compiler = this.testCompiler();
+        compiler.compileStatement(ddl);
+        TestUtil.assertMessagesContain(compiler, "Error parsing SQL: Encountered \"NULL\" at");
+
+        // properties cannot be an empty list
+        ddl = "CREATE TABLE T(T INT) WITH ( )";
+        compiler = this.testCompiler();
+        compiler.compileStatement(ddl);
+        TestUtil.assertMessagesContain(compiler, "Error parsing SQL: Encountered \")\" at");
     }
 
     @Test
@@ -55,7 +79,7 @@ public class NegativeParserTests extends BaseSQLTests {
                 )""";
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatement(ddl);
-        TestUtil.assertMessagesContain(compiler.messages, "in table with another PRIMARY KEY constraint");
+        TestUtil.assertMessagesContain(compiler, "in table with another PRIMARY KEY constraint");
     }
 
     @Test
@@ -66,7 +90,7 @@ public class NegativeParserTests extends BaseSQLTests {
                 );""";
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatement(ddl);
-        TestUtil.assertMessagesContain(compiler.messages, "Column ID already has a default value");
+        TestUtil.assertMessagesContain(compiler, "Column ID already has a default value");
     }
 
     @Test
@@ -75,7 +99,7 @@ public class NegativeParserTests extends BaseSQLTests {
                 "    git_commit_id bigint not null PRIMARY KEY PRIMARY KEY)";
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatement(ddl);
-        TestUtil.assertMessagesContain(compiler.messages, "Column GIT_COMMIT_ID already declared a primary key");
+        TestUtil.assertMessagesContain(compiler, "Column GIT_COMMIT_ID already declared a primary key");
     }
 
     @Test
@@ -87,7 +111,7 @@ public class NegativeParserTests extends BaseSQLTests {
                 )""";
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatement(ddl);
-        TestUtil.assertMessagesContain(compiler.messages, "already declared as key");
+        TestUtil.assertMessagesContain(compiler, "already declared as key");
     }
 
     @Test
@@ -99,7 +123,7 @@ public class NegativeParserTests extends BaseSQLTests {
                 )""";
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatement(ddl);
-        TestUtil.assertMessagesContain(compiler.messages, "Error parsing SQL");
+        TestUtil.assertMessagesContain(compiler, "Error parsing SQL");
     }
 
     @Test
@@ -125,7 +149,6 @@ public class NegativeParserTests extends BaseSQLTests {
                     part_order.customer,
                     AVG(DATEDIFF(day, part_order.target_date, fulfillment.fulfillment_date))
                     OVER (PARTITION BY part_order.customer
-                          ORDER BY fulfillment.fulfillment_date
                           RANGE BETWEEN INTERVAL 90 days PRECEDING and CURRENT ROW) as avg_delay
                 from
                     part_order
@@ -133,8 +156,8 @@ public class NegativeParserTests extends BaseSQLTests {
                     fulfillment
                     on part_order.id = fulfillment.part_order;
                 """);
-        TestUtil.assertMessagesContain(compiler.messages, 
-                "Not yet implemented: OVER currently does not support sorting on nullable column");
+        TestUtil.assertMessagesContain(compiler,
+                "Window specification must contain an ORDER BY clause");
     }
 
     @Test
@@ -142,7 +165,7 @@ public class NegativeParserTests extends BaseSQLTests {
         // TODO: this test may become invalid once we add support for ROW types
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatements("CREATE VIEW V AS SELECT ROW(2, 2);\n");
-        TestUtil.assertMessagesContain(compiler.messages, "error: Not yet implemented: ROW");
+        TestUtil.assertMessagesContain(compiler, "error: Not yet implemented: ROW");
     }
 
     @Test
@@ -154,7 +177,7 @@ public class NegativeParserTests extends BaseSQLTests {
                 ", COL1 DOUBLE" +
                 ")";
         compiler.compileStatement(ddl);
-        TestUtil.assertMessagesContain(compiler.messages, "Column with name 'COL1' already defined");
+        TestUtil.assertMessagesContain(compiler, "Column with name 'COL1' already defined");
     }
 
     @Test
@@ -162,8 +185,9 @@ public class NegativeParserTests extends BaseSQLTests {
         String statement = "CREATE TABLE T(c1 FLOAT)";
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatement(statement);
+        getCircuit(compiler);
         Assert.assertTrue(compiler.hasErrors());
-        TestUtil.assertMessagesContain(compiler.messages, "Do not use");
+        TestUtil.assertMessagesContain(compiler, "Do not use");
     }
 
     @Test

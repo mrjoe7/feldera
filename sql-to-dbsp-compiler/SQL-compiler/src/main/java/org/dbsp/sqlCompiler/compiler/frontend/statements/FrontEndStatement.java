@@ -25,27 +25,22 @@ package org.dbsp.sqlCompiler.compiler.frontend.statements;
 
 import org.apache.calcite.sql.SqlNode;
 import org.dbsp.sqlCompiler.compiler.errors.SourcePositionRange;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.util.ICastable;
 
 import javax.annotation.Nullable;
 
-/**
- * This class is a base class for the results produced by the DDL execution simulator.
- */
+/** Base class for statements produced by the compiler front-end.
+ * The representation is mostly at the level of RelNode, but there
+ * is also some SqlNode-level information. */
 public abstract class FrontEndStatement implements ICastable {
     public final SqlNode node;
-    /**
-     * Original statement compiled.
-     */
+    /** Original statement compiled. */
     public final String statement;
-    @Nullable
-    public final String comment;
 
-    protected FrontEndStatement(SqlNode node, String statement, @Nullable String comment) {
+    protected FrontEndStatement(SqlNode node, String statement) {
         this.node = node;
         this.statement = statement;
-        this.comment = comment;
     }
 
     public CalciteObject getCalciteObject() {

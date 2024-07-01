@@ -28,62 +28,20 @@ import org.dbsp.sqlCompiler.compiler.CompilerOptions;
 import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
 import org.dbsp.sqlCompiler.compiler.ICompilerComponent;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
-import org.dbsp.sqlCompiler.compiler.backend.ToDotVisitor;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.EliminateFunctions;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.ExpandWriteLog;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.Simplify;
-import org.dbsp.sqlCompiler.compiler.visitors.outer.expansion.ExpandOperators;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Very high level circuit-level optimizations.
- * Does not really look at the functions inside the circuit.
- */
+/** Very high level circuit-level optimizations.
+ * Does not really look at the functions inside the circuit. */
 public class CircuitOptimizer implements ICompilerComponent {
     public final DBSPCompiler compiler;
 
     public CircuitOptimizer(DBSPCompiler compiler) {
         this.compiler = compiler;
-    }
-
-    static class MonotoneAnalyzer implements CircuitTransform {
-        final IErrorReporter reporter;
-
-        public MonotoneAnalyzer(IErrorReporter reporter) {
-            this.reporter = reporter;
-        }
-
-        @SuppressWarnings("ConstantValue")
-        @Override
-        public DBSPCircuit apply(DBSPCircuit circuit) {
-            final boolean debug = false;
-
-            if (debug)
-                ToDotVisitor.toDot(this.reporter, "original.jpg", true, "jpg", circuit);
-            ExpandOperators expander = new ExpandOperators(this.reporter, 1);
-            Repeat repeat = new Repeat(this.reporter, expander);
-            DBSPCircuit expanded = repeat.apply(circuit);
-            if (debug)
-                ToDotVisitor.toDot(reporter, "expanded.jpg", false, "jpg", expanded);
-
-            MonotoneOperators monotone = new MonotoneOperators(this.reporter);
-            expanded = monotone.apply(expanded); // this does not really mutate the circuit
-
-            InsertLimiters limiters = new InsertLimiters(
-                    this.reporter, expanded, monotone.operatorMonotoneValue, expander.expansion);
-            // Notice that we apply the limiters to the original circuit, not to the expanded circuit!
-            DBSPCircuit result = limiters.apply(circuit);
-            if (debug)
-                ToDotVisitor.toDot(reporter, "limited.jpg", true, "jpg", result);
-            return result;
-        }
-
-        @Override
-        public String toString() {
-            return "MonotoneAnalyzer";
-        }
     }
 
     CircuitTransform getOptimizer() {
@@ -104,25 +62,30 @@ public class CircuitOptimizer implements ICompilerComponent {
             passes.add(new MergeSums(reporter));
             passes.add(new PropagateEmptySources(reporter));
             passes.add(new DeadCode(reporter, options.languageOptions.generateInputForEveryTable, true));
-            passes.add(new OptimizeProjections(reporter));
             passes.add(new OptimizeDistinctVisitor(reporter));
             if (options.languageOptions.incrementalize) {
                 passes.add(new IncrementalizeVisitor(reporter));
                 passes.add(new OptimizeIncrementalVisitor(reporter));
             }
             passes.add(new DeadCode(reporter, true, false));
-            if (options.languageOptions.incrementalize)
-                passes.add(new NoIntegralVisitor(reporter));
+            // passes.add(new Simplify(reporter).circuitRewriter());
+            passes.add(new MonotoneAnalyzer(reporter));
+            passes.add(new FilterJoin(reporter));
+            passes.add(new OptimizeProjections(reporter));
+            passes.add(new DeadCode(reporter, true, false));
             passes.add(new Simplify(reporter).circuitRewriter());
             // The predicate below controls which nodes have their output dumped at runtime
             passes.add(new InstrumentDump(reporter, t -> false));
+            if (options.languageOptions.incrementalize)
+                passes.add(new NoIntegralVisitor(reporter));
         }
-        passes.add(new MonotoneAnalyzer(reporter));
-        // debugging aid
-        passes.add(new RemoveDeindexOperator(reporter));
+        passes.add(new ExpandHop(reporter));
+        passes.add(new RemoveDeindexOperators(reporter));
+        passes.add(new RemoveViewOperators(reporter));
         passes.add(new EliminateFunctions(reporter).circuitRewriter());
         passes.add(new ExpandWriteLog(reporter).circuitRewriter());
         passes.add(new Simplify(reporter).circuitRewriter());
+        passes.add(new CSE(reporter));
         return new Passes(reporter, passes);
     }
 

@@ -24,7 +24,7 @@
 package org.dbsp.sqlCompiler.ir.expression.literal;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeKeyword;
 import org.dbsp.util.IIndentStream;
@@ -33,10 +33,8 @@ import org.dbsp.sqlCompiler.compiler.errors.UnimplementedException;
 import javax.annotation.Nullable;
 import java.util.Objects;
 
-/**
- * SQL contains a large number of keywords that appear in various places.
- */
-public class DBSPKeywordLiteral extends DBSPLiteral {
+/** SQL contains a large number of keywords that appear in various places. */
+public final class DBSPKeywordLiteral extends DBSPLiteral {
     public final String keyword;
 
     @Override

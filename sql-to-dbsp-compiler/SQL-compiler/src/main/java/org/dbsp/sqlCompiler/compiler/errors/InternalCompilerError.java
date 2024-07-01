@@ -25,20 +25,18 @@
 
 package org.dbsp.sqlCompiler.compiler.errors;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.ir.IDBSPNode;
 
 import javax.annotation.Nullable;
 
-/**
- * Signals a bug in the compiler -- some expected invariant doesn't hold.
- */
-public class InternalCompilerError extends BaseCompilerException {
+/** Signals a bug in the compiler -- some expected invariant doesn't hold. */
+public final class InternalCompilerError extends BaseCompilerException {
     @Nullable
     public final IDBSPNode dbspNode;
 
-    protected InternalCompilerError(String message, CalciteObject node,
-                                    @Nullable IDBSPNode dbspNode) {
+    InternalCompilerError(String message, CalciteObject node,
+                          @Nullable IDBSPNode dbspNode) {
         super(message, node);
         this.dbspNode = dbspNode;
     }

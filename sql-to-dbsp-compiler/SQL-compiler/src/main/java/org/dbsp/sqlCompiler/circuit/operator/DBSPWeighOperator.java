@@ -1,17 +1,17 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.NonCoreIR;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 
 import java.util.List;
 
 @NonCoreIR
-public class DBSPWeighOperator extends DBSPUnaryOperator {
+public final class DBSPWeighOperator extends DBSPUnaryOperator {
     static DBSPTypeZSet outputType(DBSPTypeIndexedZSet sourceType) {
         return new DBSPTypeZSet(sourceType.elementType);
     }

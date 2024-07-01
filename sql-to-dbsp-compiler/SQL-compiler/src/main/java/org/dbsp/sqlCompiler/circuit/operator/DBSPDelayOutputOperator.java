@@ -1,6 +1,6 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.NonCoreIR;
@@ -19,10 +19,10 @@ import java.util.List;
  * The ToDot visitor will correct this situation when drawing them.
  */
 @NonCoreIR
-public class DBSPDelayOutputOperator extends DBSPSourceBaseOperator {
+public final class DBSPDelayOutputOperator extends DBSPSourceBaseOperator {
     public DBSPDelayOutputOperator(CalciteObject node, DBSPType outputType, boolean isMultiset,
                                    @Nullable String comment) {
-        super(node, outputType, isMultiset, comment, new NameGen("delay").nextName());
+        super(node, outputType, isMultiset, new NameGen("delay").nextName(), comment);
     }
 
     @Override

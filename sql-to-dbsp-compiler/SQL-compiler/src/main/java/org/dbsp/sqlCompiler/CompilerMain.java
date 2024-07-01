@@ -52,9 +52,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Map;
 
-/**
- * Main entry point of the SQL compiler.
- */
+/** Main entry point of the SQL compiler. */
 public class CompilerMain {
     final CompilerOptions options;
 
@@ -69,7 +67,7 @@ public class CompilerMain {
         commander.usage();
     }
 
-    void parseOptions(String[] argv) {
+    int parseOptions(String[] argv) {
         JCommander commander = JCommander.newBuilder()
                 .addObject(this.options)
                 .build();
@@ -77,12 +75,17 @@ public class CompilerMain {
         try {
             commander.parse(argv);
         } catch (ParameterException ex) {
+            if (ex.getMessage().contains("Only one main parameter allowed")) {
+                if (this.options.ioOptions.outputFile.isEmpty()) {
+                    System.err.println("Did you forget to specify the output file with -o?");
+                }
+            }
             System.err.println(ex.getMessage());
-            System.exit(1);
+            return 1;
         }
         if (this.options.help) {
             this.usage(commander);
-            System.exit(1);
+            return 1;
         }
 
         for (Map.Entry<String, String> entry: options.ioOptions.loggingLevel.entrySet()) {
@@ -91,9 +94,11 @@ public class CompilerMain {
                 Logger.INSTANCE.setLoggingLevel(entry.getKey(), level);
             } catch (NumberFormatException ex) {
                 System.err.println("-T option must be followed by 'class=number'; could not parse " + entry);
-                System.exit(1);
+                return 1;
             }
         }
+
+        return 0;
     }
 
     PrintStream getOutputStream() throws IOException {
@@ -115,11 +120,7 @@ public class CompilerMain {
         }
     }
 
-    static int schemaCount = 0;
-
-    /**
-     * Run compiler, return exit code.
-     */
+    /** Run compiler, return exit code. */
     CompilerMessages run() throws SQLException {
         DBSPCompiler compiler = new DBSPCompiler(this.options);
         String conn = this.options.ioOptions.metadataSource;
@@ -148,6 +149,10 @@ public class CompilerMain {
         compiler.compileInput();
         if (compiler.hasErrors())
             return compiler.messages;
+        // The following runs all compilation stages
+        DBSPCircuit dbsp = compiler.getFinalCircuit(this.options.ioOptions.functionName);
+        if (compiler.hasErrors())
+            return compiler.messages;
         if (this.options.ioOptions.emitJsonSchema != null) {
             try {
                 PrintStream outputStream = new PrintStream(
@@ -162,8 +167,6 @@ public class CompilerMain {
             }
         }
 
-        compiler.optimize();
-        DBSPCircuit dbsp = compiler.getFinalCircuit(this.options.ioOptions.functionName);
         String dotFormat = (this.options.ioOptions.emitJpeg ? "jpg"
                             : this.options.ioOptions.emitPng ? "png"
                             : null);
@@ -173,8 +176,8 @@ public class CompilerMain {
                         "Must specify an output file when outputting jpeg or png");
                 return compiler.messages;
             }
-            boolean verboseDot = this.options.ioOptions.verbosity > 1;
-            ToDotVisitor.toDot(compiler, this.options.ioOptions.outputFile, verboseDot, dotFormat, dbsp);
+            ToDotVisitor.toDot(compiler, this.options.ioOptions.outputFile,
+                    this.options.ioOptions.verbosity, dotFormat, dbsp);
             return compiler.messages;
         }
         try {
@@ -214,7 +217,13 @@ public class CompilerMain {
 
     public static CompilerMessages execute(String... argv) throws SQLException {
         CompilerMain main = new CompilerMain();
-        main.parseOptions(argv);
+        int exitCode = main.parseOptions(argv);
+        if (exitCode != 0) {
+            // return empty messages
+            CompilerMessages result = new CompilerMessages(new DBSPCompiler(new CompilerOptions()));
+            result.setExitCode(exitCode);
+            return result;
+        }
         return main.run();
     }
 

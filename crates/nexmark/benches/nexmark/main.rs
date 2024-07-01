@@ -5,6 +5,13 @@
 use anyhow::{anyhow, Result};
 use ascii_table::AsciiTable;
 use clap::Parser;
+use dbsp::circuit::{CircuitConfig, StorageCacheConfig, StorageConfig};
+use dbsp::storage::backend::metrics::{
+    BUFFER_CACHE_HIT, BUFFER_CACHE_MISS, COMPACTION_SIZE_SAVINGS, COMPACTION_STALL_TIME,
+    FILES_CREATED, READS_SUCCESS, TOTAL_BYTES_READ, TOTAL_BYTES_WRITTEN, TOTAL_COMPACTIONS,
+    WRITES_SUCCESS,
+};
+use dbsp::storage::backend::tempdir_for_thread;
 use dbsp::utils::Tup2;
 use dbsp::{
     mimalloc::{AllocStats, MiMalloc},
@@ -16,13 +23,21 @@ use dbsp_nexmark::{
     queries::{Query, ALL_QUERIES},
     NexmarkSource,
 };
+use env_logger::Env;
 use indicatif::{ProgressBar, ProgressStyle};
+use metrics::{Key, SharedString, Unit};
+use metrics_util::{
+    debugging::{DebugValue, DebuggingRecorder, Snapshotter},
+    CompositeKey, MetricKind,
+};
 use num_format::{Locale, ToFormattedString};
 use serde::Serialize;
 use serde_with::{serde_as, DurationSecondsWithFrac};
 use size_of::HumanBytes;
 use std::{
+    collections::HashMap,
     fs::OpenOptions,
+    ops::Sub,
     path::Path,
     sync::mpsc,
     thread::{self, JoinHandle},
@@ -31,6 +46,8 @@ use std::{
 
 #[global_allocator]
 static ALLOC: MiMalloc = MiMalloc;
+
+type MetricsSnapshot = HashMap<CompositeKey, (Option<Unit>, Option<SharedString>, DebugValue)>;
 
 /// Currently just the elapsed time, but later add CPU and Mem.
 #[serde_as]
@@ -43,6 +60,10 @@ struct NexmarkResult {
     elapsed: Duration,
     before_stats: AllocStats,
     after_stats: AllocStats,
+    #[serde(skip_serializing)]
+    before_metrics: MetricsSnapshot,
+    #[serde(skip_serializing)]
+    after_metrics: MetricsSnapshot,
 }
 
 struct InputStats {
@@ -93,7 +114,7 @@ fn spawn_source_producer(
         .name("benchmark producer".into())
         .spawn(move || {
             let batch_size = nexmark_config.input_batch_size;
-            let mut source = NexmarkSource::new(nexmark_config);
+            let mut source = NexmarkSource::new(nexmark_config.generator_options);
             let mut num_events: u64 = 0;
 
             // Start iterating by loading up the first batch of input ready for processing,
@@ -130,6 +151,7 @@ fn spawn_source_producer(
 }
 
 fn coordinate_input_and_steps(
+    progress: bool,
     expected_num_events: u64,
     dbsp_step_tx: mpsc::SyncSender<()>,
     source_step_tx: mpsc::SyncSender<()>,
@@ -139,8 +161,11 @@ fn coordinate_input_and_steps(
 ) -> Result<InputStats> {
     // The producer should have already loaded up the first batch ready for
     // consumption before we start the loop.
-    // let progress_bar = ProgressBar::new(expected_num_events);
-    let progress_bar = ProgressBar::new(expected_num_events);
+    let progress_bar = if progress {
+        ProgressBar::new(expected_num_events)
+    } else {
+        ProgressBar::hidden()
+    };
     progress_bar.set_style(
         ProgressStyle::with_template(
             "{human_pos} / {human_len} [{wide_bar}] {percent:.2} % {per_sec:.2} {eta}",
@@ -182,9 +207,9 @@ fn coordinate_input_and_steps(
     }
 }
 
-fn create_ascii_table() -> AsciiTable {
-    /// Reported metrics (per query) for the benchmark.
-    const RESULT_COLUMNS: [&str; 13] = [
+fn create_ascii_table(config: &NexmarkConfig) -> AsciiTable {
+    // Reported metrics (per query) for the benchmark.
+    let mut result_columns = vec![
         "Query",
         "#Events",
         "Cores",
@@ -193,31 +218,59 @@ fn create_ascii_table() -> AsciiTable {
         "Throughput/Cores",
         "Total Usr CPU",
         "Total Sys CPU",
-        "Current RSS",
         "Peak RSS",
-        "Current Commit",
-        "Peak Commit",
         "Page Faults",
     ];
+    let mut max_width = 200;
+
+    if config.min_storage_rows != usize::MAX {
+        result_columns.extend_from_slice(&[
+            "# Files",
+            "Avg WrSz",
+            "Avg RdSz",
+            "Writes",
+            "Reads",
+            "Cache Hit Rate",
+            "Cpcts",
+            "Cpct Saving",
+            "Cpct Stall",
+        ]);
+        max_width += 50;
+    }
 
     let mut ascii_table = AsciiTable::default();
-    ascii_table.set_max_width(200);
+    ascii_table.set_max_width(max_width);
 
-    for (idx, column_name) in RESULT_COLUMNS.into_iter().enumerate() {
+    for (idx, column_name) in result_columns.into_iter().enumerate() {
         ascii_table.column(idx).set_header(column_name);
     }
 
     ascii_table
 }
 
-fn run_query(config: &NexmarkConfig, query: Query) -> NexmarkResult {
+fn run_query(config: &NexmarkConfig, snapshotter: &Snapshotter, query: Query) -> NexmarkResult {
     let name = format!("{query:?}");
-    println!("Starting {name} bench of {} events...", config.max_events);
+    println!(
+        "Starting {name} bench of {} events...",
+        config.generator_options.max_events
+    );
 
     let num_cores = config.cpu_cores;
-    let expected_num_events = config.max_events;
+    let expected_num_events = config.generator_options.max_events;
+    let circuit_config = CircuitConfig {
+        storage: Some(StorageConfig {
+            path: tempdir_for_thread().to_string_lossy().to_string(),
+            cache: if config.feldera_cache {
+                StorageCacheConfig::FelderaCache
+            } else {
+                StorageCacheConfig::PageCache
+            },
+        }),
+        min_storage_rows: config.min_storage_rows,
+        ..CircuitConfig::with_workers(num_cores)
+    };
     let (dbsp, input_handle) =
-        Runtime::init_circuit(num_cores, move |circuit: &mut RootCircuit| {
+        Runtime::init_circuit(circuit_config, move |circuit: &mut RootCircuit| {
             let (stream, input_handle) = circuit.add_input_zset::<Event>();
 
             query.query(circuit, stream);
@@ -256,9 +309,11 @@ fn run_query(config: &NexmarkConfig, query: Query) -> NexmarkResult {
 
     ALLOC.reset_stats();
     let before_stats = ALLOC.stats();
+    let before_metrics = snapshotter.snapshot();
     let start = Instant::now();
 
     let input_stats = coordinate_input_and_steps(
+        config.progress,
         expected_num_events,
         dbsp_step_tx,
         source_step_tx,
@@ -270,6 +325,7 @@ fn run_query(config: &NexmarkConfig, query: Query) -> NexmarkResult {
 
     let elapsed = start.elapsed();
     let after_stats = ALLOC.stats();
+    let after_metrics = snapshotter.snapshot();
 
     // Return the user/system CPU overhead from the generator/input thread.
     NexmarkResult {
@@ -277,12 +333,14 @@ fn run_query(config: &NexmarkConfig, query: Query) -> NexmarkResult {
         num_cores,
         before_stats,
         after_stats,
+        before_metrics: before_metrics.into_hashmap(),
+        after_metrics: after_metrics.into_hashmap(),
         elapsed,
         num_events: input_stats.num_events,
     }
 }
 
-fn run_queries(nexmark_config: &NexmarkConfig) -> Vec<NexmarkResult> {
+fn run_queries(nexmark_config: &NexmarkConfig, snapshotter: &Snapshotter) -> Vec<NexmarkResult> {
     let queries_to_run = if nexmark_config.query.is_empty() {
         ALL_QUERIES.as_slice()
     } else {
@@ -290,7 +348,7 @@ fn run_queries(nexmark_config: &NexmarkConfig) -> Vec<NexmarkResult> {
     };
     let mut results = Vec::new();
     for &query in queries_to_run {
-        let result = run_query(nexmark_config, query);
+        let result = run_query(nexmark_config, &snapshotter, query);
         results.push(result);
     }
     results
@@ -306,17 +364,113 @@ fn run_queries(nexmark_config: &NexmarkConfig) -> Vec<NexmarkResult> {
 // https://github.com/matklad/t-cmd/blob/master/src/main.rs Also CpuMonitor.java
 // in nexmark (binary that uses procfs to get cpu usage ever 100ms?)
 
+fn parse_counter(metrics: &MetricsSnapshot, name: &'static str) -> u64 {
+    if let Some((_, _, DebugValue::Counter(value))) = metrics.get(&CompositeKey::new(
+        MetricKind::Counter,
+        Key::from_static_name(name),
+    )) {
+        *value
+    } else {
+        0
+    }
+}
+
+struct Metrics {
+    files_created: u64,
+    writes_success: u64,
+    reads_success: u64,
+    total_bytes_written: u64,
+    total_bytes_read: u64,
+    buffer_cache_hit: u64,
+    buffer_cache_miss: u64,
+    total_compactions: u64,
+    compaction_savings: u64,
+    compaction_stall_time: u64,
+}
+
+impl From<&MetricsSnapshot> for Metrics {
+    fn from(source: &MetricsSnapshot) -> Self {
+        Self {
+            files_created: parse_counter(source, FILES_CREATED),
+            writes_success: parse_counter(source, WRITES_SUCCESS),
+            reads_success: parse_counter(source, READS_SUCCESS),
+            total_bytes_written: parse_counter(source, TOTAL_BYTES_WRITTEN),
+            total_bytes_read: parse_counter(source, TOTAL_BYTES_READ),
+            buffer_cache_hit: parse_counter(source, BUFFER_CACHE_HIT),
+            buffer_cache_miss: parse_counter(source, BUFFER_CACHE_MISS),
+            total_compactions: parse_counter(source, TOTAL_COMPACTIONS),
+            compaction_savings: parse_counter(source, COMPACTION_SIZE_SAVINGS),
+            compaction_stall_time: parse_counter(source, COMPACTION_STALL_TIME),
+        }
+    }
+}
+
+fn div(num: u64, denom: u64) -> u64 {
+    num.checked_div(denom).unwrap_or_default()
+}
+
+struct MetricsDiff {
+    n_created: u64,
+    _n_writes: u64,
+    _n_reads: u64,
+    avg_wblock: u64,
+    avg_rblock: u64,
+    total_bytes_written: u64,
+    total_bytes_read: u64,
+    cache_miss: u64,
+    cache_hit: u64,
+    total_compactions: u64,
+    compaction_savings: u64,
+    compaction_stall_time: u64,
+}
+
+impl Sub<&Metrics> for &Metrics {
+    type Output = MetricsDiff;
+
+    fn sub(self, rhs: &Metrics) -> Self::Output {
+        let lhs = self;
+
+        let n_writes = lhs.writes_success - rhs.writes_success;
+        let n_reads = lhs.reads_success - rhs.reads_success;
+        let wbytes_diff = lhs.total_bytes_written - rhs.total_bytes_written;
+        let rbytes_diff = lhs.total_bytes_read - rhs.total_bytes_read;
+
+        MetricsDiff {
+            n_created: lhs.files_created - rhs.files_created,
+            _n_writes: n_writes,
+            _n_reads: n_reads,
+            avg_wblock: div(wbytes_diff, n_writes),
+            avg_rblock: div(rbytes_diff, n_reads),
+            total_bytes_written: lhs.total_bytes_written - rhs.total_bytes_written,
+            total_bytes_read: lhs.total_bytes_read - rhs.total_bytes_read,
+            cache_miss: lhs.buffer_cache_miss - rhs.buffer_cache_miss,
+            cache_hit: lhs.buffer_cache_hit - rhs.buffer_cache_hit,
+            total_compactions: lhs.total_compactions - rhs.total_compactions,
+            compaction_savings: lhs.compaction_savings - rhs.compaction_savings,
+            compaction_stall_time: lhs.compaction_stall_time - rhs.compaction_stall_time,
+        }
+    }
+}
+
 fn main() -> Result<()> {
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let nexmark_config = NexmarkConfig::parse();
     let cpu_cores = nexmark_config.cpu_cores;
 
-    let results = run_queries(&nexmark_config);
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    recorder.install().unwrap();
+    let results = run_queries(&nexmark_config, &snapshotter);
 
-    let ascii_table = create_ascii_table();
+    let ascii_table = create_ascii_table(&nexmark_config);
     ascii_table.print(results.iter().map(|result| {
         let (before, after) = (result.before_stats, result.after_stats);
 
-        vec![
+        let before_metrics: Metrics = (&result.before_metrics).into();
+        let after_metrics: Metrics = (&result.after_metrics).into();
+        let diff = &after_metrics - &before_metrics;
+
+        let mut row = vec![
             result.name.clone(),
             format!("{}", result.num_events.to_formatted_string(&Locale::en)),
             format!("{cpu_cores}"),
@@ -334,12 +488,27 @@ fn main() -> Result<()> {
                 "{:#.3?}",
                 Duration::from_millis((after.system_ms - before.system_ms) as u64),
             ),
-            format!("{}", HumanBytes::from(after.current_rss)),
             format!("{}", HumanBytes::from(after.peak_rss)),
-            format!("{}", HumanBytes::from(after.current_commit)),
-            format!("{}", HumanBytes::from(after.peak_commit)),
             format!("{}", after.page_faults - before.page_faults),
-        ]
+        ];
+        if nexmark_config.min_storage_rows != usize::MAX {
+            row.extend_from_slice(&[
+                format!("{}", diff.n_created),
+                format!("{}", HumanBytes::from(diff.avg_wblock)),
+                format!("{}", HumanBytes::from(diff.avg_rblock)),
+                format!("{}", HumanBytes::from(diff.total_bytes_written)),
+                format!("{}", HumanBytes::from(diff.total_bytes_read)),
+                format!(
+                    "{:.0}%",
+                    (diff.cache_hit as f64 / (diff.cache_miss as f64 + diff.cache_hit as f64))
+                        * 100.0
+                ),
+                format!("{}", diff.total_compactions),
+                format!("{}", diff.compaction_savings),
+                format!("{} s", diff.compaction_stall_time / 1000),
+            ])
+        }
+        row
     }));
 
     if let Some(csv_file) = nexmark_config.output_csv {

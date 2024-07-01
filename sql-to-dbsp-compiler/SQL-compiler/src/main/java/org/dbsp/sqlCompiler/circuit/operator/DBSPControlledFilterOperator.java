@@ -1,8 +1,8 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
-import org.dbsp.sqlCompiler.compiler.visitors.inner.monotone.ValueProjection;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.monotone.IMaybeMonotoneType;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.DBSPParameter;
 import org.dbsp.sqlCompiler.ir.expression.DBSPBinaryExpression;
@@ -31,13 +31,11 @@ import java.util.Objects;
  * right input is a stream of scalars.  The function is a boolean function
  * that takes an input element and a scalar; when the function returns 'true'
  * the input element makes it to the output. */
-public class DBSPControlledFilterOperator extends DBSPOperator {
+public final class DBSPControlledFilterOperator extends DBSPBinaryOperator {
     public DBSPControlledFilterOperator(
             CalciteObject node, DBSPExpression expression,
             DBSPOperator data, DBSPOperator control) {
-        super(node, "controlled_filter", expression, data.getType(), data.isMultiset);
-        this.addInput(data);
-        this.addInput(control);
+        super(node, "controlled_filter", expression, data.getType(), data.isMultiset, data, control);
         // this.checkArgumentFunctionType(expression, 0, data);
     }
 
@@ -46,8 +44,9 @@ public class DBSPControlledFilterOperator extends DBSPOperator {
         DBSPType rightType = right.getType();
         assert leftType.sameType(rightType): "Types differ: " + leftType + " vs " + rightType;
         if (leftType.is(DBSPTypeBaseType.class)) {
+            // Notice the comparison using AGG_GTE, which never returns NULL
             DBSPExpression comparison = new DBSPBinaryExpression(CalciteObject.EMPTY,
-                    new DBSPTypeBool(CalciteObject.EMPTY, false), DBSPOpcode.GTE, left, right);
+                    new DBSPTypeBool(CalciteObject.EMPTY, false), DBSPOpcode.AGG_GTE, left, right);
             return new DBSPBinaryExpression(CalciteObject.EMPTY,
                     new DBSPTypeBool(CalciteObject.EMPTY, false), DBSPOpcode.AND, compare, comparison);
         } else if (leftType.is(DBSPTypeRef.class)) {
@@ -67,7 +66,8 @@ public class DBSPControlledFilterOperator extends DBSPOperator {
     static DBSPExpression generateTupleCompare(DBSPExpression left, DBSPExpression right) {
         DBSPType leftType = left.getType();
         DBSPType rightType = right.getType();
-        assert leftType.sameType(rightType): "Types differ: " + leftType + " vs " + rightType;
+        assert leftType.sameType(rightType):
+                "Types differ: " + leftType + " vs " + rightType;
         DBSPLetStatement leftVar = new DBSPLetStatement("left", left.borrow());
         DBSPLetStatement rightVar = new DBSPLetStatement("right", right.borrow());
         List<DBSPStatement> statements = Linq.list(leftVar, rightVar);
@@ -78,14 +78,14 @@ public class DBSPControlledFilterOperator extends DBSPOperator {
     }
 
     public static DBSPControlledFilterOperator create(
-            CalciteObject node, DBSPOperator data, ValueProjection dataProjection, DBSPOperator control) {
+            CalciteObject node, DBSPOperator data, IMaybeMonotoneType monotoneType, DBSPOperator control) {
         DBSPType controlType = control.getType();
-        DBSPType leftSliceType = dataProjection.getProjectionResultType();
+        DBSPType leftSliceType = Objects.requireNonNull(monotoneType.getProjectedType());
         assert leftSliceType.sameType(controlType):
                 "Projection type does not match control type " + leftSliceType + "/" + controlType;
 
         DBSPType rowType = data.getOutputRowType();
-        DBSPVariablePath dataArg = new DBSPVariablePath("d", rowType);
+        DBSPVariablePath dataArg = new DBSPVariablePath(rowType);
         DBSPParameter param;
         if (rowType.is(DBSPTypeRawTuple.class)) {
             DBSPTypeRawTuple raw = rowType.to(DBSPTypeRawTuple.class);
@@ -94,9 +94,9 @@ public class DBSPControlledFilterOperator extends DBSPOperator {
         } else {
             param = new DBSPParameter(dataArg.variable, dataArg.getType().ref());
         }
-        DBSPExpression projection = dataProjection.project(dataArg);
+        DBSPExpression projection = monotoneType.projectExpression(dataArg);
 
-        DBSPVariablePath controlArg = new DBSPVariablePath("c", controlType.ref());
+        DBSPVariablePath controlArg = new DBSPVariablePath(controlType.ref());
         DBSPExpression compare = DBSPControlledFilterOperator.generateTupleCompare(projection, controlArg.deref());
         DBSPExpression closure = compare.closure(param, controlArg.asParameter());
         return new DBSPControlledFilterOperator(node, closure, data, control);
@@ -106,7 +106,7 @@ public class DBSPControlledFilterOperator extends DBSPOperator {
     public DBSPOperator withFunction(@Nullable DBSPExpression expression, DBSPType outputType) {
         return new DBSPControlledFilterOperator(
                 this.getNode(), Objects.requireNonNull(expression),
-                this.inputs.get(0), this.inputs.get(1));
+                this.left(), this.right());
     }
 
     @Override

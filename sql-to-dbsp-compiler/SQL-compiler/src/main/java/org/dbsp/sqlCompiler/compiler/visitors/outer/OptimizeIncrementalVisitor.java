@@ -29,10 +29,8 @@ import org.dbsp.util.Linq;
 
 import java.util.List;
 
-/**
- * This visitor optimizes incremental circuits by pushing integral operators
- * forward.
- */
+/** This visitor optimizes incremental circuits by pushing integral operators
+ * forward. */
 public class OptimizeIncrementalVisitor extends CircuitCloneVisitor {
     public OptimizeIncrementalVisitor(IErrorReporter reporter) {
         super(reporter, false);
@@ -78,16 +76,19 @@ public class OptimizeIncrementalVisitor extends CircuitCloneVisitor {
     }
 
     @Override
-    public void postorder(DBSPIndexOperator operator) { this.linear(operator); }
-
-    @Override
     public void postorder(DBSPFlatMapOperator operator) { this.linear(operator); }
 
     @Override
     public void postorder(DBSPNoopOperator operator) { this.linear(operator); }
 
     @Override
-    public void postorder(DBSPWindowAggregateOperator operator) { this.linear(operator); }
+    public void postorder(DBSPHopOperator operator) { this.linear(operator); }
+
+    @Override
+    public void postorder(DBSPViewOperator operator) { this.linear(operator); }
+
+    @Override
+    public void postorder(DBSPPartitionedRollingAggregateOperator operator) { this.linear(operator); }
 
     @Override
     public void postorder(DBSPMapIndexOperator operator) {

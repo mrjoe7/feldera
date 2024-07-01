@@ -2,22 +2,21 @@
 // generator may have custom generation and validation methods.
 
 import { BigNumberInput } from '$lib/components/input/BigNumberInput'
+import { NumberInput } from '$lib/components/input/NumberInput'
 import { clampBigNumber } from '$lib/functions/common/bigNumber'
 import {
   randomExponentialBigNumber,
   randomIntBigNumber,
   randomNormalBigNumber
 } from '$lib/functions/common/d3-random-bignumber'
-import { getRandomDate } from '$lib/functions/common/date'
 import { nonNull } from '$lib/functions/common/function'
 import { tuple } from '$lib/functions/common/tuple'
 import { bignumber, maxBigNumber, minBigNumber } from '$lib/functions/common/valibot'
-import { dateTimeRange, findBaseType, numericRange } from '$lib/functions/ddl'
-import { ColumnType, Field, SqlType } from '$lib/services/manager'
-import assert from 'assert'
-import BigNumber from 'bignumber.js'
+import { dateTimeRange, findBaseType, numericRange } from '$lib/functions/sqlValue'
+import { ColumnType, Field } from '$lib/services/manager'
+import { BigNumber } from 'bignumber.js/bignumber.js'
 import * as d3 from 'd3-random'
-import dayjs from 'dayjs'
+import dayjs, { Dayjs } from 'dayjs'
 import invariant from 'tiny-invariant'
 import { match, P } from 'ts-pattern'
 import * as va from 'valibot'
@@ -40,7 +39,8 @@ import {
 import { FieldNames } from './'
 import { BooleanSwitch } from './BooleanSwitch'
 
-import type { SQLValueJS } from '$lib/functions/ddl'
+import type { SQLValueJS } from '$lib/functions/sqlValue'
+
 type AddFieldName<T> = { name: FieldNames } & Partial<T>
 
 // A list of categories for grouping the generators in the selector.
@@ -80,44 +80,49 @@ export interface IRngGenMethod {
     // The compnent to render for the form
     component: React.FunctionComponent<any>
     // The props to pass to the component
-    props:
-      | AddFieldName<TextFieldProps>
-      | AddFieldName<SwitchProps>
-      | AddFieldName<TimePickerProps<Date>>
-      | AddFieldName<DatePickerProps<Date>>
-      | AddFieldName<DateRangePickerProps<Date>>
-      | AddFieldName<DateTimePickerProps<Date>>
-      | AddFieldName<MultiInputDateTimeRangeFieldProps<Date>>
+    props: AddFieldName<
+      | TextFieldProps
+      | SwitchProps
+      | TimePickerProps<Dayjs>
+      | DatePickerProps<Dayjs>
+      | DateRangePickerProps<Dayjs>
+      | DateTimePickerProps<Dayjs>
+      | MultiInputDateTimeRangeFieldProps<Dayjs>
+    >
   }[]
   // A validation schema for the form fields to display errors in case an
   // invalid value is entered in a form.
   validationSchema?: (field: ColumnType) => va.ObjectSchema<any>
 }
 
-const getDefaultRngMethodName = (sqlType: ColumnType): string =>
-  match(sqlType)
-    .with({ type: SqlType.BOOLEAN }, () => 'Percentage')
-    .with({ type: SqlType.TINYINT }, () => 'Uniform')
-    .with({ type: SqlType.SMALLINT }, () => 'Uniform')
-    .with({ type: SqlType.INTEGER }, () => 'Uniform')
-    .with({ type: SqlType.BIGINT }, () => 'Uniform')
-    .with({ type: SqlType.DECIMAL }, () => 'Uniform')
-    .with({ type: SqlType.REAL }, () => 'Uniform')
-    .with({ type: SqlType.DOUBLE }, () => 'Uniform')
-    .with({ type: SqlType.VARCHAR }, () => 'Word')
-    .with({ type: SqlType.CHAR }, () => 'Word')
-    .with({ type: SqlType.TIME }, () => 'Uniform')
-    .with({ type: SqlType.TIMESTAMP }, () => 'Uniform')
-    .with({ type: SqlType.DATE }, () => 'Uniform')
-    .with({ type: SqlType.ARRAY }, () => {
-      assert(sqlType.component !== null && sqlType.component !== undefined, 'Array type must have a component type')
+const getDefaultRngMethodName = (sqlType: ColumnType): string => {
+  return match(sqlType)
+    .with({ type: undefined }, () => invariant(sqlType.type) as never)
+    .with({ type: 'BOOLEAN' }, () => 'Percentage')
+    .with({ type: 'TINYINT' }, () => 'Uniform')
+    .with({ type: 'SMALLINT' }, () => 'Uniform')
+    .with({ type: 'INTEGER' }, () => 'Uniform')
+    .with({ type: 'BIGINT' }, () => 'Uniform')
+    .with({ type: 'DECIMAL' }, () => 'Uniform')
+    .with({ type: 'REAL' }, () => 'Uniform')
+    .with({ type: 'DOUBLE' }, () => 'Uniform')
+    .with({ type: 'VARCHAR' }, () => 'Word')
+    .with({ type: 'CHAR' }, () => 'Word')
+    .with({ type: 'TIME' }, () => 'Uniform')
+    .with({ type: 'TIMESTAMP' }, () => 'Uniform')
+    .with({ type: 'DATE' }, () => 'Uniform')
+    .with({ type: 'ARRAY' }, () => {
+      invariant(sqlType.component !== null && sqlType.component !== undefined, 'Array type must have a component type')
       return getDefaultRngMethodName(sqlType.component)
     })
-    .with({ type: SqlType.BINARY }, () => 'BINARY type not implemented')
-    .with({ type: SqlType.VARBINARY }, () => 'VARBINARY type not implemented')
-    .with({ type: SqlType.INTERVAL }, () => 'INTERVAL type not supported')
-    .with({ type: SqlType.NULL }, () => 'NULL type not supported')
+    .with({ type: 'BINARY' }, () => 'BINARY type not implemented')
+    .with({ type: 'VARBINARY' }, () => 'VARBINARY type not implemented')
+    .with({ type: { Interval: P._ } }, () => 'INTERVAL type not supported')
+    .with({ type: 'STRUCT' }, () => 'STRUCT type not supported')
+    .with({ type: 'MAP' }, () => 'MAP type not supported')
+    .with({ type: 'NULL' }, () => 'NULL type not supported')
     .exhaustive()
+}
 
 // Given a title & SQL type, returns the corresponding generator method.
 export const getRngMethodByName = (title: string, sqlType: ColumnType): IRngGenMethod | null => {
@@ -129,7 +134,7 @@ export const getRngMethodByName = (title: string, sqlType: ColumnType): IRngGenM
 export const getDefaultRngMethod = (sqlType: ColumnType): IRngGenMethod => {
   const title = getDefaultRngMethodName(sqlType)
   const method = getRngMethodByName(title, sqlType)
-  assert(method !== null, `Could not find default method for type ${sqlType.type}`)
+  invariant(method !== null, `Could not find default method for type ${sqlType.type}`)
   return method
 }
 
@@ -141,12 +146,12 @@ const transformToArrayGenerator = (type: ColumnType, generators: IRngGenMethod[]
   }
 
   return generators.map(rgm => {
-    assert(type.component !== undefined && type.component !== null)
+    invariant(type.component !== undefined && type.component !== null)
 
     let validationSchema = undefined
     if (rgm.validationSchema) {
       validationSchema = () => {
-        assert(rgm.validationSchema)
+        invariant(rgm.validationSchema)
         return rgm.validationSchema(findBaseType(type.component as ColumnType))
       }
     }
@@ -155,7 +160,7 @@ const transformToArrayGenerator = (type: ColumnType, generators: IRngGenMethod[]
       invariant(ct.component)
       const c = ct.component
       const { min, max } = numericRange(ct)
-      const length = d3.randomInt(min.toNumber(), max.toNumber())()
+      const length = d3.randomInt.source(faker.number.float)(min.toNumber(), max.toNumber())()
       return Array.from({ length }, () => rgm.generator(c, settings))
     }
 
@@ -169,24 +174,26 @@ const transformToArrayGenerator = (type: ColumnType, generators: IRngGenMethod[]
 
 // Given a ColumType returns a list of applicable generator methods.
 export const columnTypeToRngOptions = (type: ColumnType): IRngGenMethod[] => {
+  invariant(type.type)
   return (
     match(type.type)
-      .with(SqlType.TINYINT, SqlType.SMALLINT, SqlType.INTEGER, SqlType.BIGINT, () => INTEGER_GENERATORS)
-      .with(SqlType.REAL, SqlType.DOUBLE, () => FLOAT_GENERATORS)
+      .with('TINYINT', 'SMALLINT', 'INTEGER', () => INTEGER_GENERATORS)
+      .with('BIGINT', () => BIGINTEGER_GENERATORS)
+      .with('REAL', 'DOUBLE', () => FLOAT_GENERATORS)
       // There aren't any good random generator libraries for arbitrary
       // precision numbers. So we just use the same generators as FLOAT and
       // DOUBLE for now.
-      .with(SqlType.DECIMAL, () => FLOAT_GENERATORS)
-      .with(SqlType.VARCHAR, SqlType.CHAR, () => STRING_GENERATORS)
-      .with(SqlType.BOOLEAN, () => BOOLEAN_GENERATORS)
-      .with(SqlType.TIME, () => TIME_GENERATORS)
-      .with(SqlType.DATE, () => DATE_GENERATORS)
-      .with(SqlType.TIMESTAMP, () => TIMESTAMP_GENERATORS)
-      .with(SqlType.ARRAY, () => {
+      .with('DECIMAL', () => DECIMAL_GENERATORS)
+      .with('VARCHAR', 'CHAR', () => STRING_GENERATORS)
+      .with('BOOLEAN', () => BOOLEAN_GENERATORS)
+      .with('TIME', () => TIME_GENERATORS)
+      .with('DATE', () => DATE_GENERATORS)
+      .with('TIMESTAMP', () => TIMESTAMP_GENERATORS)
+      .with('ARRAY', () => {
         invariant(type.component)
         return transformToArrayGenerator(type, columnTypeToRngOptions(type.component))
       })
-      .with(SqlType.INTERVAL, SqlType.BINARY, SqlType.VARBINARY, SqlType.NULL, () => UNSUPPORTED_TYPE_GENERATORS)
+      .with({ Interval: P._ }, 'BINARY', 'VARBINARY', 'STRUCT', 'NULL', 'MAP', () => UNSUPPORTED_TYPE_GENERATORS)
       .exhaustive()
       .map(({ generator, ...rng }) => ({
         ...rng,
@@ -240,16 +247,17 @@ const BOOLEAN_GENERATORS: IRngGenMethod[] = [
   {
     title: 'Percentage',
     category: Categories.DISTRIBUTION,
-    generator: (ct, settings) => Math.random() < (settings?.true_pct ?? 0.5),
+    generator: (ct, settings) => faker.number.float() < (settings?.true_pct ?? 0.5),
     form_fields: () => [
       {
         sm: 4,
-        component: TextField,
+        component: NumberInput,
         props: {
+          min: 0,
+          max: 1,
+          step: 0.01,
           name: FieldNames.TRUE_PCT,
-          label: 'True [%]',
-          type: 'number',
-          inputProps: { min: 0, max: 1, step: 0.01 }
+          label: 'True [%]'
         }
       }
     ],
@@ -285,16 +293,9 @@ const NUMBER_GENERATORS: IRngGenMethod[] = [
     ],
     validationSchema: ct => {
       const range = rangeBigNumber(numericRange(ct))
-      return va.object(
-        {
-          value: va.optional(bignumber(range))
-        },
-        [
-          (v: any) => {
-            return v
-          }
-        ]
-      )
+      return va.object({
+        value: va.optional(bignumber(range))
+      })
     }
   },
   {
@@ -303,10 +304,9 @@ const NUMBER_GENERATORS: IRngGenMethod[] = [
     generator: (ct, props) =>
       clampToRange(
         ct,
-        randomNormalBigNumber(props?.mu ?? new BigNumber(100), props?.sigma ?? new BigNumber(10))().decimalPlaces(
-          0,
-          BigNumber.ROUND_FLOOR
-        )
+        randomNormalBigNumber
+          .source(faker.number.float)(props?.mu ?? new BigNumber(100), props?.sigma ?? new BigNumber(10))()
+          .decimalPlaces(0, BigNumber.ROUND_FLOOR)
       ),
     form_fields: () => [
       {
@@ -338,7 +338,9 @@ const NUMBER_GENERATORS: IRngGenMethod[] = [
     generator: (ct, props) => {
       return clampToRange(
         ct,
-        randomExponentialBigNumber(props?.lambda ?? new BigNumber(0.1))().decimalPlaces(0, BigNumber.ROUND_FLOOR)
+        randomExponentialBigNumber
+          .source(faker.number.float)(props?.lambda ?? new BigNumber(0.1))()
+          .decimalPlaces(0, BigNumber.ROUND_FLOOR)
       )
     },
     form_fields: () => [
@@ -361,7 +363,7 @@ const NUMBER_GENERATORS: IRngGenMethod[] = [
   }
 ]
 
-const INTEGER_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
+const BIGINTEGER_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
   {
     title: 'Uniform',
     category: Categories.DISTRIBUTION,
@@ -377,7 +379,7 @@ const INTEGER_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
         0,
         BigNumber.ROUND_FLOOR
       )
-      return randomIntBigNumber(min, max)()
+      return randomIntBigNumber.source(faker.number.float)(min, max)()
     },
     form_fields: ({ columntype: ct }) => [
       {
@@ -411,10 +413,15 @@ const INTEGER_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
   }
 ])
 
+const INTEGER_GENERATORS: IRngGenMethod[] = BIGINTEGER_GENERATORS.map(({ generator, ...rest }) => ({
+  generator: (config, settings) => (generator(config, settings) as BigNumber).toNumber(),
+  ...rest
+}))
+
 // Generators for floating point numbers.
 //
 // This 'inherits' all the integer generators.
-const FLOAT_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
+const DECIMAL_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
   {
     title: 'Uniform',
     category: Categories.DISTRIBUTION,
@@ -435,7 +442,7 @@ const FLOAT_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
       //
       // See also:
       // https://stackoverflow.com/questions/28461796/randomint-function-that-can-uniformly-handle-the-full-range-of-min-and-max-safe
-      return clampToScale(ct, new BigNumber(d3.randomUniform(min, max)()))
+      return clampToScale(ct, new BigNumber(d3.randomUniform.source(faker.number.float)(min, max)()))
     },
     form_fields: () => [
       {
@@ -468,7 +475,12 @@ const FLOAT_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
     generator: (ct, props) => {
       return clampToScale(
         ct,
-        clampToRange(ct, new BigNumber(d3.randomBeta(props?.alpha?.toNumber() ?? 1, props?.beta?.toNumber() ?? 1)()))
+        clampToRange(
+          ct,
+          new BigNumber(
+            d3.randomBeta.source(faker.number.float)(props?.alpha?.toNumber() ?? 1, props?.beta?.toNumber() ?? 1)()
+          )
+        )
       )
     },
     form_fields: () => [
@@ -501,11 +513,16 @@ const FLOAT_GENERATORS: IRngGenMethod[] = NUMBER_GENERATORS.concat([
   }
 ])
 
+const FLOAT_GENERATORS: IRngGenMethod[] = DECIMAL_GENERATORS.map(({ generator, ...rest }) => ({
+  generator: (config, settings) => (generator(config, settings) as BigNumber).toNumber(),
+  ...rest
+}))
+
 const TIME_GENERATORS: IRngGenMethod[] = [
   {
     title: 'Constant',
     category: Categories.DEFAULT,
-    generator: (ct, settings) => dayjs(new Date(settings?.time)),
+    generator: (ct, settings) => dayjs(settings?.time ? new Date(settings.time) : faker.date.anytime()),
     form_fields: field => [
       {
         sm: 3,
@@ -535,7 +552,7 @@ const TIME_GENERATORS: IRngGenMethod[] = [
       from.setMonth(to.getMonth())
       from.setFullYear(to.getFullYear())
 
-      return dayjs(getRandomDate(from, to))
+      return dayjs(faker.date.between({ from, to }))
     },
     // Replace form element with TimeRangePicker when added
     //
@@ -573,7 +590,7 @@ const DATE_GENERATORS: IRngGenMethod[] = [
   {
     title: 'Constant',
     category: Categories.DEFAULT,
-    generator: (ct, settings) => dayjs(new Date(settings?.time)),
+    generator: (ct, settings) => dayjs(settings?.time ? new Date(settings.time) : faker.date.anytime()),
     form_fields: field => [
       {
         sm: 3,
@@ -592,7 +609,12 @@ const DATE_GENERATORS: IRngGenMethod[] = [
     category: Categories.DISTRIBUTION,
     generator: (ct, settings) => {
       const [min, max] = dateTimeRange(ct)
-      return dayjs(getRandomDate(new Date(settings?.date_range[0] ?? min), new Date(settings?.date_range[1] ?? max)))
+      return dayjs(
+        faker.date.between({
+          from: new Date(settings?.date_range[0] ?? min),
+          to: new Date(settings?.date_range[1] ?? max)
+        })
+      )
     },
     form_fields: field => [
       {
@@ -631,7 +653,12 @@ const TIMESTAMP_GENERATORS: IRngGenMethod[] = [
     category: Categories.DISTRIBUTION,
     generator: (ct, settings) => {
       const [min, max] = dateTimeRange(ct)
-      return dayjs(getRandomDate(new Date(settings?.date_range[0] ?? min), new Date(settings?.date_range[1] ?? max)))
+      return dayjs(
+        faker.date.between({
+          from: new Date(settings?.date_range[0] ?? min),
+          to: new Date(settings?.date_range[1] ?? max)
+        })
+      )
     },
     // Replace with DateTimeRangePicker when ready
     // See also:
@@ -1136,14 +1163,14 @@ const STRING_GENERATORS: IRngGenMethod[] = [
     return match({ type, precision })
       .with(
         {
-          type: SqlType.VARCHAR,
+          type: 'VARCHAR',
           precision: P.when(value => (value ?? -1) >= 0)
         },
         ({ precision }) => string.substring(0, precision!)
       )
       .with(
         {
-          type: SqlType.CHAR,
+          type: 'CHAR',
           precision: P.when(value => (value ?? -1) >= 0)
         },
         ({ precision }) => string.substring(0, precision!).padEnd(precision!)

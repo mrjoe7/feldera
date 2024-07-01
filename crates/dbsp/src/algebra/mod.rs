@@ -17,17 +17,109 @@ pub use order::{PartialOrder, TotalOrder};
 pub use present::Present;
 pub use zset::{
     DynZWeight, IndexedZSet, IndexedZSetReader, OrdIndexedZSet, OrdIndexedZSetFactories, OrdZSet,
-    OrdZSetFactories, ZBatch, ZBatchReader, ZCursor, ZSet, ZSetReader, ZTrace, ZWeight,
+    OrdZSetFactories, VecIndexedZSet, VecIndexedZSetFactories, VecZSet, VecZSetFactories, ZBatch,
+    ZBatchReader, ZCursor, ZSet, ZSetReader, ZTrace, ZWeight,
 };
 
+use num::PrimInt;
 use rust_decimal::{prelude::One, prelude::Zero, Decimal};
 use size_of::SizeOf;
 use std::{
+    fmt::{Debug, Display},
     marker::PhantomData,
     num::Wrapping,
     ops::{Add, AddAssign, Mul, Neg},
     rc::Rc,
 };
+
+/// Trait for types where the minimum value is known
+pub trait MinValue {
+    fn min_value() -> Self;
+}
+
+/// Trait for types where the maximum value is known
+pub trait MaxValue {
+    fn max_value() -> Self;
+}
+
+/// Trait for integer types returning the first
+/// value representable in this type which is
+/// too large for the previous narrower type
+pub trait FirstLargeValue {
+    fn large() -> Self;
+}
+
+/// Trait for primitive integers that are unsigned
+pub trait UnsignedPrimInt: PrimInt + FirstLargeValue + HasZero + Debug + Display {}
+
+impl FirstLargeValue for u8 {
+    fn large() -> Self {
+        // There is no narrower unsigned type
+        0x1
+    }
+}
+
+impl FirstLargeValue for u16 {
+    fn large() -> Self {
+        0x100
+    }
+}
+
+impl FirstLargeValue for u32 {
+    fn large() -> Self {
+        0x10000
+    }
+}
+
+impl FirstLargeValue for u64 {
+    fn large() -> Self {
+        0x1_0000_0000
+    }
+}
+
+impl FirstLargeValue for u128 {
+    fn large() -> Self {
+        0x1_0000_0000_0000_0000
+    }
+}
+
+impl UnsignedPrimInt for u8 {}
+impl UnsignedPrimInt for u16 {}
+impl UnsignedPrimInt for u32 {}
+impl UnsignedPrimInt for u64 {}
+impl UnsignedPrimInt for u128 {}
+
+/// Trait for primitive integers that are signed
+pub trait SignedPrimInt:
+    PrimInt + Neg<Output = Self> + HasZero + HasOne + Ord + Debug + Display
+{
+}
+
+// For all primitive signed integers we also implement
+// MinValue and MaxValue
+macro_rules! make_signed {
+    ($type: ty) => {
+        impl MinValue for $type {
+            fn min_value() -> Self {
+                <$type>::MIN
+            }
+        }
+
+        impl MaxValue for $type {
+            fn max_value() -> Self {
+                <$type>::MAX
+            }
+        }
+
+        impl SignedPrimInt for $type {}
+    };
+}
+
+make_signed!(i8);
+make_signed!(i16);
+make_signed!(i32);
+make_signed!(i64);
+make_signed!(i128);
 
 /// A trait for types that have a zero value.
 ///
@@ -239,15 +331,9 @@ where
 /// (this cannot be checked statically).
 // TODO: Add a `for<'a> Add<&'a Self, Output = Self>` bound for adding an owned
 // and a referenced value together
-pub trait SemigroupValue:
-    Clone + Eq + SizeOf + Add<Output = Self> + AddByRef + AddAssign + AddAssignByRef + 'static
-{
-}
+pub trait SemigroupValue: Clone + Eq + SizeOf + AddByRef + AddAssignByRef + 'static {}
 
-impl<T> SemigroupValue for T where
-    T: Clone + Eq + SizeOf + Add<Output = Self> + AddByRef + AddAssign + AddAssignByRef + 'static
-{
-}
+impl<T> SemigroupValue for T where T: Clone + Eq + SizeOf + AddByRef + AddAssignByRef + 'static {}
 
 /// A type with an associative addition and a zero.
 pub trait MonoidValue: SemigroupValue + HasZero {}
@@ -558,6 +644,7 @@ impl OptionWeightType for f64 {}
 impl OptionWeightType for F32 {}
 impl OptionWeightType for F64 {}
 impl OptionWeightType for Decimal {}
+impl OptionWeightType for Present {}
 
 impl<T, S> MulByRef<S> for Option<T>
 where

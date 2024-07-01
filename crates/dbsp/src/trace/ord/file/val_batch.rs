@@ -1,5 +1,5 @@
 use dyn_clone::clone_box;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{
     cmp::Ordering,
     fmt,
@@ -7,14 +7,15 @@ use std::{
     ops::DerefMut,
 };
 
-use crate::storage::backend::Backend;
+use crate::trace::cursor::{HasTimeDiffCursor, TimeDiffCursor};
+use crate::trace::TimedBuilder;
 use crate::{
     dynamic::{
         DataTrait, DynDataTyped, DynOpt, DynPair, DynUnit, DynVec, DynWeightedPairs, Erase,
         Factory, LeanVec, WeightTrait, WithFactory,
     },
     storage::file::{
-        reader::{ColumnSpec, Cursor as FileCursor, Reader},
+        reader::{ColumnSpec, Cursor as FileCursor, Error as ReaderError, Reader},
         writer::{Parameters, Writer2},
         Factories as FileFactories,
     },
@@ -134,22 +135,18 @@ where
     }
 }
 
-type RawValBatch<K, V, T, R> = Reader<
-    Backend,
+type RawValBatch<K, V, T, R> = Reader<(
+    &'static K,
+    &'static DynUnit,
     (
-        &'static K,
-        &'static DynUnit,
-        (
-            &'static V,
-            &'static DynWeightedPairs<DynDataTyped<T>, R>,
-            (),
-        ),
+        &'static V,
+        &'static DynWeightedPairs<DynDataTyped<T>, R>,
+        (),
     ),
->;
+)>;
 
 type RawKeyCursor<'s, K, V, T, R> = FileCursor<
     's,
-    Backend,
     K,
     DynUnit,
     (
@@ -170,7 +167,6 @@ type RawKeyCursor<'s, K, V, T, R> = FileCursor<
 
 type RawValCursor<'s, K, V, T, R> = FileCursor<
     's,
-    Backend,
     V,
     DynWeightedPairs<DynDataTyped<T>, R>,
     (),
@@ -384,6 +380,19 @@ where
     fn persistent_id(&self) -> Option<PathBuf> {
         Some(self.file.path())
     }
+
+    fn from_path(factories: &Self::Factories, path: &Path) -> Result<Self, ReaderError> {
+        let any_factory0 = factories.factories0.any_factories();
+        let any_factory1 = factories.factories1.any_factories();
+        let file = Reader::open(&[&any_factory0, &any_factory1], &Runtime::storage(), path)?;
+        Ok(Self {
+            factories: factories.clone(),
+            lower_bound: 0,
+            file,
+            lower: Antichain::new(),
+            upper: Antichain::new(),
+        })
+    }
 }
 
 fn recede_times<T, R>(td: &mut DynWeightedPairs<DynDataTyped<T>, R>, frontier: &T)
@@ -419,7 +428,7 @@ fn include<K: ?Sized>(x: &K, filter: &Option<Filter<K>>) -> bool {
 }
 
 fn read_filtered<'a, K, A, N, T>(
-    cursor: &mut FileCursor<Backend, K, A, N, T>,
+    cursor: &mut FileCursor<K, A, N, T>,
     filter: &Option<Filter<K>>,
     key: &'a mut K,
 ) -> Option<&'a K>
@@ -486,7 +495,7 @@ where
 {
     fn copy_values_if(
         &self,
-        output: &mut Writer2<Backend, K, DynUnit, V, DynWeightedPairs<DynDataTyped<T>, R>>,
+        output: &mut Writer2<K, DynUnit, V, DynWeightedPairs<DynDataTyped<T>, R>>,
         key: &K,
         key_cursor: &mut RawKeyCursor<'_, K, V, T, R>,
         value_filter: &Option<Filter<V>>,
@@ -514,7 +523,7 @@ where
 
     fn copy_value(
         &self,
-        output: &mut Writer2<Backend, K, DynUnit, V, DynWeightedPairs<DynDataTyped<T>, R>>,
+        output: &mut Writer2<K, DynUnit, V, DynWeightedPairs<DynDataTyped<T>, R>>,
         cursor: &mut RawValCursor<'_, K, V, T, R>,
         value: &V,
     ) {
@@ -527,7 +536,7 @@ where
 
     fn merge_values(
         &self,
-        output: &mut Writer2<Backend, K, DynUnit, V, DynWeightedPairs<DynDataTyped<T>, R>>,
+        output: &mut Writer2<K, DynUnit, V, DynWeightedPairs<DynDataTyped<T>, R>>,
         cursor1: &mut RawValCursor<'_, K, V, T, R>,
         cursor2: &mut RawValCursor<'_, K, V, T, R>,
         value_filter: &Option<Filter<V>>,
@@ -632,7 +641,7 @@ where
                                 &mut cursor2.next_column().unwrap().first().unwrap(),
                                 value_filter,
                             ) {
-                                output.write0((&key1, &())).unwrap();
+                                output.write0((key1, &())).unwrap();
                             }
                             cursor1.move_next().unwrap();
                             cursor2.move_next().unwrap();
@@ -957,6 +966,55 @@ where
     }
 }
 
+pub struct FileValTimeDiffCursor<T, R>
+where
+    T: Timestamp,
+    R: WeightTrait + ?Sized,
+{
+    timediffs: Box<DynWeightedPairs<DynDataTyped<T>, R>>,
+    index: usize,
+}
+
+impl<T, R> TimeDiffCursor<'_, T, R> for FileValTimeDiffCursor<T, R>
+where
+    T: Timestamp,
+    R: WeightTrait + ?Sized,
+{
+    fn current(&mut self, _tmp: &mut R) -> Option<(&T, &R)> {
+        if self.index < self.timediffs.len() {
+            let (time, diff) = self.timediffs[self.index].split();
+            Some((time, diff))
+        } else {
+            None
+        }
+    }
+
+    fn step(&mut self) {
+        self.index += 1;
+    }
+}
+
+impl<'s, K, V, T, R> HasTimeDiffCursor<K, V, T, R> for FileValCursor<'s, K, V, T, R>
+where
+    K: DataTrait + ?Sized,
+    V: DataTrait + ?Sized,
+    T: Timestamp,
+    R: WeightTrait + ?Sized,
+{
+    type TimeDiffCursor<'a> = FileValTimeDiffCursor<T, R>
+    where
+        Self: 'a;
+
+    fn time_diff_cursor(&self) -> Self::TimeDiffCursor<'_> {
+        let mut timediffs = self.timediff_factory.default_box();
+        self.times(timediffs.as_mut());
+        FileValTimeDiffCursor {
+            timediffs,
+            index: 0,
+        }
+    }
+}
+
 /// A builder for creating layers from unsorted update tuples.
 pub struct FileValBuilder<K, V, T, R>
 where
@@ -967,8 +1025,47 @@ where
 {
     factories: FileValBatchFactories<K, V, T, R>,
     time: T,
-    writer: Writer2<Backend, K, DynUnit, V, DynWeightedPairs<DynDataTyped<T>, R>>,
+    writer: Writer2<K, DynUnit, V, DynWeightedPairs<DynDataTyped<T>, R>>,
     cur_key: Box<DynOpt<K>>,
+}
+
+impl<K, V, T, R> TimedBuilder<FileValBatch<K, V, T, R>> for FileValBuilder<K, V, T, R>
+where
+    K: DataTrait + ?Sized,
+    V: DataTrait + ?Sized,
+    T: Timestamp,
+    R: WeightTrait + ?Sized,
+{
+    fn push_time(&mut self, key: &K, val: &V, time: &T, weight: &R) {
+        if let Some(cur_key) = self.cur_key.get() {
+            if key != cur_key {
+                self.writer.write0((cur_key, ().erase())).unwrap();
+                self.cur_key.from_ref(key);
+            }
+        } else {
+            self.cur_key.from_ref(key);
+        }
+        let mut timediffs = self.factories.timediff_factory.default_box();
+        timediffs.push_refs((time.erase(), weight));
+        self.writer.write1((val, timediffs.as_ref())).unwrap();
+    }
+
+    fn done_with_bounds(
+        mut self,
+        lower: Antichain<T>,
+        upper: Antichain<T>,
+    ) -> FileValBatch<K, V, T, R> {
+        if let Some(cur_key) = self.cur_key.get() {
+            self.writer.write0((cur_key, ().erase())).unwrap();
+        }
+        FileValBatch {
+            factories: self.factories,
+            file: self.writer.into_reader().unwrap(),
+            lower_bound: 0,
+            lower,
+            upper,
+        }
+    }
 }
 
 impl<K, V, T, R> Builder<FileValBatch<K, V, T, R>> for FileValBuilder<K, V, T, R>
@@ -1008,17 +1105,8 @@ where
     }
 
     fn push_refs(&mut self, key: &K, val: &V, diff: &R) {
-        if let Some(cur_key) = self.cur_key.get() {
-            if key != cur_key {
-                self.writer.write0((cur_key, ().erase())).unwrap();
-                self.cur_key.from_ref(key);
-            }
-        } else {
-            self.cur_key.from_ref(key);
-        }
-        let mut timediffs = self.factories.timediff_factory.default_box();
-        timediffs.push_refs((self.time.erase(), diff));
-        self.writer.write1((val, timediffs.as_ref())).unwrap();
+        let time = self.time.clone();
+        self.push_time(key, val, &time, diff);
     }
 
     fn push_vals(&mut self, key: &mut K, val: &mut V, diff: &mut R) {

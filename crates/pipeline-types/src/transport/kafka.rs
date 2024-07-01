@@ -1,12 +1,17 @@
 use serde_json::Value as JsonValue;
+use std::fmt::Formatter;
 use std::{
     collections::BTreeMap,
     env,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::config::TransportConfigVariant;
+use crate::service::{KafkaService, ServiceConfig, ServiceConfigVariant};
+use crate::transport::error::{TransportReplaceError, TransportResolveError};
 use anyhow::{Error as AnyError, Result as AnyResult};
-use serde::{Deserialize, Serialize};
+use serde::de::{Error, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
 
 /// Configuration for reading data from Kafka topics with `InputTransport`.
@@ -39,6 +44,9 @@ pub struct KafkaInputConfig {
 
     /// If specified, this enables fault tolerance in the Kafka input connector.
     pub fault_tolerance: Option<KafkaInputFtConfig>,
+
+    /// If specified, this service is used to provide defaults for the Kafka options.
+    pub kafka_service: Option<String>,
 }
 
 /// Fault tolerance configuration for Kafka input connector.
@@ -187,6 +195,83 @@ const fn default_initialization_timeout_secs() -> u32 {
     60
 }
 
+/// Kafka header value encoded as a UTF-8 string or a byte array.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, ToSchema)]
+#[repr(transparent)]
+pub struct KafkaHeaderValue(pub Vec<u8>);
+
+/// Visitor for deserializing Kafka headers value.
+struct HeaderVisitor;
+
+impl<'de> Visitor<'de> for HeaderVisitor {
+    type Value = KafkaHeaderValue;
+
+    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+        formatter.write_str("a string (e.g., \"xyz\") or a byte array (e.g., '[1,2,3])")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        Ok(KafkaHeaderValue(v.as_bytes().to_owned()))
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        Ok(KafkaHeaderValue(v.into_bytes()))
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut result = Vec::with_capacity(seq.size_hint().unwrap_or_default());
+
+        while let Some(b) = seq.next_element()? {
+            result.push(b);
+        }
+
+        Ok(KafkaHeaderValue(result))
+    }
+}
+
+impl<'de> Deserialize<'de> for KafkaHeaderValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(HeaderVisitor)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn test_kafka_header_value_deserialize() {
+    assert_eq!(
+        serde_json::from_str::<KafkaHeaderValue>(r#""foobar""#).unwrap(),
+        KafkaHeaderValue(br#"foobar"#.to_vec())
+    );
+
+    assert_eq!(
+        serde_json::from_str::<KafkaHeaderValue>(r#"[1,2,3,4,5]"#).unwrap(),
+        KafkaHeaderValue(vec![1u8, 2, 3, 4, 5])
+    );
+
+    assert!(serde_json::from_str::<KafkaHeaderValue>(r#"150"#).is_err());
+
+    assert!(serde_json::from_str::<KafkaHeaderValue>(r#"{{"foo": "bar"}}"#).is_err());
+}
+
+/// Kafka message header.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, ToSchema)]
+pub struct KafkaHeader {
+    pub key: String,
+    pub value: Option<KafkaHeaderValue>,
+}
+
 /// Configuration for writing data to a Kafka topic with `OutputTransport`.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, ToSchema)]
 pub struct KafkaOutputConfig {
@@ -199,6 +284,10 @@ pub struct KafkaOutputConfig {
 
     /// Topic to write to.
     pub topic: String,
+
+    /// Kafka headers to be added to each message produced by this connector.
+    #[serde(default)]
+    pub headers: Vec<KafkaHeader>,
 
     /// The log level of the client.
     ///
@@ -229,6 +318,9 @@ pub struct KafkaOutputConfig {
     /// If specified, this enables fault tolerance in the Kafka output
     /// connector.
     pub fault_tolerance: Option<KafkaOutputFtConfig>,
+
+    /// If specified, this service is used to provide defaults for the Kafka options.
+    pub kafka_service: Option<String>,
 }
 
 /// Fault tolerance configuration for Kafka output connector.
@@ -291,4 +383,192 @@ pub struct Chunk {
     /// JSON payload.
     #[schema(value_type = Option<Object>)]
     pub json_data: Option<JsonValue>,
+}
+
+/// Generates the final Kafka options combining those of the service,
+/// followed by the connector Kafka options.
+pub fn combine_service_and_connector_kafka_options(
+    service: &KafkaService,
+    connector_kafka_options: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, TransportResolveError> {
+    // 1) Service Kafka options
+    let mut kafka_options =
+        service
+            .generate_final_options()
+            .map_err(|e| TransportResolveError::InvalidConfig {
+                reason: format!("{:?}", e),
+            })?;
+
+    // 2) Apply connector options overriding any duplicates
+    for (key, value) in connector_kafka_options.iter() {
+        kafka_options.insert(key.clone(), value.clone());
+    }
+
+    Ok(kafka_options)
+}
+
+impl TransportConfigVariant for KafkaInputConfig {
+    fn name(&self) -> String {
+        "kafka_input".to_string()
+    }
+
+    fn service_names(&self) -> Vec<String> {
+        match &self.kafka_service {
+            None => vec![],
+            Some(service_name) => vec![service_name.clone()],
+        }
+    }
+
+    fn replace_any_service_names(
+        mut self,
+        replacement_service_names: &[String],
+    ) -> Result<Self, TransportReplaceError> {
+        match self.kafka_service {
+            None => {
+                if replacement_service_names.is_empty() {
+                    Ok(self)
+                } else {
+                    Err(TransportReplaceError {
+                        expected: 0,
+                        actual: replacement_service_names.len(),
+                    })
+                }
+            }
+            Some(_) => {
+                if replacement_service_names.len() == 1 {
+                    self.kafka_service = Some(replacement_service_names.first().unwrap().clone());
+                    Ok(self)
+                } else {
+                    Err(TransportReplaceError {
+                        expected: 1,
+                        actual: replacement_service_names.len(),
+                    })
+                }
+            }
+        }
+    }
+
+    #[allow(irrefutable_let_patterns)]
+    fn resolve_any_services(
+        self,
+        services: &BTreeMap<String, ServiceConfig>,
+    ) -> Result<Self, TransportResolveError> {
+        match self.kafka_service {
+            None => Ok(self),
+            Some(kafka_service_name) => {
+                // There must be exactly one service present
+                if services.len() != 1 {
+                    return Err(TransportResolveError::IncorrectNumServices {
+                        expected: 1,
+                        actual: services.len(),
+                    });
+                }
+
+                // The service must be a Kafka service
+                let received_service = services.get(&kafka_service_name).unwrap().clone();
+                if let ServiceConfig::Kafka(kafka_service) = received_service {
+                    Ok(KafkaInputConfig {
+                        kafka_options: combine_service_and_connector_kafka_options(
+                            &kafka_service,
+                            &self.kafka_options,
+                        )?,
+                        topics: self.topics,
+                        log_level: self.log_level,
+                        group_join_timeout_secs: self.group_join_timeout_secs,
+                        fault_tolerance: self.fault_tolerance,
+                        kafka_service: None, // The service has been resolved, as such it is set to None
+                    })
+                } else {
+                    Err(TransportResolveError::UnexpectedServiceType {
+                        expected: format!("{:?}", KafkaService::config_type()),
+                        actual: format!("{:?}", received_service.config_type()),
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl TransportConfigVariant for KafkaOutputConfig {
+    fn name(&self) -> String {
+        "kafka_output".to_string()
+    }
+
+    fn service_names(&self) -> Vec<String> {
+        match &self.kafka_service {
+            None => vec![],
+            Some(service_name) => vec![service_name.clone()],
+        }
+    }
+
+    fn replace_any_service_names(
+        mut self,
+        replacement_service_names: &[String],
+    ) -> Result<Self, TransportReplaceError> {
+        match self.kafka_service {
+            None => {
+                if replacement_service_names.is_empty() {
+                    Ok(self)
+                } else {
+                    Err(TransportReplaceError {
+                        expected: 0,
+                        actual: replacement_service_names.len(),
+                    })
+                }
+            }
+            Some(_) => {
+                if replacement_service_names.len() == 1 {
+                    self.kafka_service = Some(replacement_service_names.first().unwrap().clone());
+                    Ok(self)
+                } else {
+                    Err(TransportReplaceError {
+                        expected: 1,
+                        actual: replacement_service_names.len(),
+                    })
+                }
+            }
+        }
+    }
+
+    #[allow(irrefutable_let_patterns)]
+    fn resolve_any_services(
+        self,
+        services: &BTreeMap<String, ServiceConfig>,
+    ) -> Result<Self, TransportResolveError> {
+        match self.kafka_service {
+            None => Ok(self),
+            Some(kafka_service_name) => {
+                // There must be exactly one service present
+                if services.len() != 1 {
+                    return Err(TransportResolveError::IncorrectNumServices {
+                        expected: 1,
+                        actual: services.len(),
+                    });
+                }
+
+                // The service must be a Kafka service
+                let received_service = services.get(&kafka_service_name).unwrap().clone();
+                if let ServiceConfig::Kafka(kafka_service) = received_service {
+                    Ok(KafkaOutputConfig {
+                        kafka_options: combine_service_and_connector_kafka_options(
+                            &kafka_service,
+                            &self.kafka_options,
+                        )?,
+                        topic: self.topic,
+                        headers: self.headers,
+                        log_level: self.log_level,
+                        max_inflight_messages: self.max_inflight_messages,
+                        initialization_timeout_secs: self.initialization_timeout_secs,
+                        fault_tolerance: self.fault_tolerance,
+                        kafka_service: None, // The service has been resolved, as such it is set to None
+                    })
+                } else {
+                    Err(TransportResolveError::UnexpectedServiceType {
+                        expected: format!("{:?}", KafkaService::config_type()),
+                        actual: format!("{:?}", received_service.config_type()),
+                    })
+                }
+            }
+        }
+    }
 }

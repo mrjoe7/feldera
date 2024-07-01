@@ -4,8 +4,9 @@ use std::{borrow::Cow, sync::Arc};
 
 use actix_web::HttpRequest;
 use anyhow::{bail, Result as AnyResult};
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{
+    DataType, Field as ArrowField, Fields, IntervalUnit as ArrowIntervalUnit, Schema, TimeUnit,
+};
 use bytes::Bytes;
 use erased_serde::Serialize as ErasedSerialize;
 use parquet::arrow::ArrowWriter;
@@ -13,7 +14,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use serde::Deserialize;
 use serde_arrow::schema::SerdeArrowSchema;
-use serde_arrow::ArrowBuilder;
+use serde_arrow::ArrayBuilder;
 use serde_urlencoded::Deserializer as UrlDeserializer;
 use serde_yaml::Value as YamlValue;
 
@@ -26,10 +27,10 @@ use crate::{
 };
 use pipeline_types::format::json::JsonFlavor;
 use pipeline_types::format::parquet::{ParquetEncoderConfig, ParquetParserConfig};
-use pipeline_types::program_schema::{ColumnType, Relation, SqlType};
+use pipeline_types::program_schema::{ColumnType, Field, IntervalUnit, Relation, SqlType};
 
 #[cfg(test)]
-mod test;
+pub mod test;
 
 /// CSV format parser.
 pub struct ParquetInputFormat;
@@ -222,11 +223,29 @@ impl OutputFormat for ParquetOutputFormat {
     }
 }
 
-fn relation_to_parquet_schema(relation: &Relation) -> Result<SerdeArrowSchema, ControllerError> {
+pub fn relation_to_arrow_fields(fields: &[Field], delta_lake: bool) -> Vec<ArrowField> {
+    fn field_to_arrow_field(f: &Field, delta_lake: bool) -> ArrowField {
+        ArrowField::new(
+            &f.name,
+            columntype_to_datatype(&f.columntype, delta_lake),
+            // FIXME: Databricks refuses to understand the `nullable: false` constraint.
+            delta_lake || f.columntype.nullable,
+        )
+    }
+
+    fn struct_to_arrow_fields(fields: &[Field], delta_lake: bool) -> Fields {
+        Fields::from(
+            fields
+                .iter()
+                .map(|f| field_to_arrow_field(f, delta_lake))
+                .collect::<Vec<ArrowField>>(),
+        )
+    }
+
     // The type conversion is chosen in accordance with our internal
     // data types (see sqllib). This may need to be adjusted in the future
     // or made configurable.
-    fn columntype_to_datatype(c: &ColumnType) -> DataType {
+    fn columntype_to_datatype(c: &ColumnType, delta_lake: bool) -> DataType {
         match c.typ {
             SqlType::Boolean => DataType::Boolean,
             SqlType::TinyInt => DataType::Int8,
@@ -239,27 +258,76 @@ fn relation_to_parquet_schema(relation: &Relation) -> Result<SerdeArrowSchema, C
                 c.precision.unwrap_or(0).try_into().unwrap(),
                 c.scale.unwrap_or(0).try_into().unwrap(),
             ),
-            SqlType::Char | SqlType::Varchar => DataType::LargeUtf8,
+            SqlType::Char | SqlType::Varchar => DataType::Utf8,
             SqlType::Time => DataType::Time64(TimeUnit::Nanosecond),
-            SqlType::Timestamp => DataType::Timestamp(TimeUnit::Millisecond, None),
+            // DeltaLake only supports microsecond-based timestamp encoding, so we just
+            // hardwire that for now.  We can make it configurable in the future.
+            // FIXME: Also, the timezone should be `None`, but that gets compiled into `timezone_ntz`
+            // in the JSON schema, which Databricks doesn't fully support yet.
+            SqlType::Timestamp => DataType::Timestamp(
+                TimeUnit::Microsecond,
+                if delta_lake { Some("UTC".into()) } else { None },
+            ),
             SqlType::Date => DataType::Date32,
             SqlType::Null => DataType::Null,
-            SqlType::Binary | SqlType::Varbinary | SqlType::Interval => todo!(),
-            SqlType::Array => todo!("handle array types"),
+            SqlType::Binary => DataType::LargeBinary,
+            SqlType::Varbinary => DataType::LargeBinary,
+            SqlType::Interval(
+                IntervalUnit::YearToMonth | IntervalUnit::Year | IntervalUnit::Month,
+            ) => DataType::Interval(ArrowIntervalUnit::YearMonth),
+            SqlType::Interval(_) => DataType::Interval(ArrowIntervalUnit::DayTime),
+            SqlType::Array => {
+                // SqlType::Array implies c.component.is_some()
+                let array_component = c.component.as_ref().unwrap();
+                DataType::LargeList(Arc::new(ArrowField::new_list_field(
+                    columntype_to_datatype(array_component, delta_lake),
+                    // FIXME: Databricks refuses to understand the `nullable: false` constraint.
+                    delta_lake || c.nullable,
+                )))
+            }
+            SqlType::Struct => DataType::Struct(struct_to_arrow_fields(
+                c.fields.as_ref().unwrap(),
+                delta_lake,
+            )),
+            SqlType::Map => {
+                let key_type = c.key.as_ref().unwrap();
+                let val_type = c.value.as_ref().unwrap();
+
+                DataType::Map(
+                    Arc::new(ArrowField::new_struct(
+                        "entries",
+                        [
+                            Arc::new(ArrowField::new(
+                                "keys",
+                                columntype_to_datatype(key_type, delta_lake),
+                                key_type.nullable,
+                            )),
+                            Arc::new(ArrowField::new(
+                                "values",
+                                columntype_to_datatype(val_type, delta_lake),
+                                val_type.nullable,
+                            )),
+                        ]
+                        .as_slice(),
+                        false,
+                    )),
+                    false,
+                )
+            }
         }
     }
 
-    let fields = relation
-        .fields
+    fields
         .iter()
-        .map(|f| {
-            Field::new(
-                &f.name,
-                columntype_to_datatype(&f.columntype),
-                f.columntype.nullable,
-            )
-        })
-        .collect::<Vec<Field>>();
+        .map(|f| field_to_arrow_field(f, delta_lake))
+        .collect::<Vec<ArrowField>>()
+}
+
+pub fn relation_to_parquet_schema(
+    fields: &[Field],
+    delta_lake: bool,
+) -> Result<SerdeArrowSchema, ControllerError> {
+    let fields = relation_to_arrow_fields(fields, delta_lake);
 
     SerdeArrowSchema::from_arrow_fields(&fields).map_err(|e| ControllerError::SchemaParseError {
         error: format!("Unable to convert schema to parquet/arrow: {e}"),
@@ -286,7 +354,7 @@ impl ParquetEncoder {
         Ok(Self {
             output_consumer,
             config,
-            parquet_schema: relation_to_parquet_schema(&_relation)?,
+            parquet_schema: relation_to_parquet_schema(&_relation.fields, false)?,
             _relation,
             buffer: Vec::new(),
             max_buffer_size,
@@ -303,8 +371,7 @@ impl Encoder for ParquetEncoder {
         let mut buffer = take(&mut self.buffer);
         let props = WriterProperties::builder().build();
         let schema = Arc::new(Schema::new(self.parquet_schema.to_arrow_fields()?));
-        let fields = self.parquet_schema.to_arrow_fields()?;
-        let mut builder = ArrowBuilder::new(&fields)?;
+        let mut builder = ArrayBuilder::new(self.parquet_schema.clone())?;
 
         let mut num_records = 0;
         let mut cursor = CursorWithPolarity::new(
@@ -351,8 +418,7 @@ impl Encoder for ParquetEncoder {
                     let buffer_cursor = Cursor::new(&mut buffer);
                     let mut writer =
                         ArrowWriter::try_new(buffer_cursor, schema.clone(), Some(props.clone()))?;
-                    let arrays = builder.build_arrays()?;
-                    let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+                    let batch = builder.to_record_batch()?;
                     writer.write(&batch)?;
                     writer.close()?;
 
@@ -369,8 +435,7 @@ impl Encoder for ParquetEncoder {
             let buffer_cursor = Cursor::new(&mut buffer);
             let mut writer =
                 ArrowWriter::try_new(buffer_cursor, schema.clone(), Some(props.clone()))?;
-            let arrays = builder.build_arrays()?;
-            let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+            let batch = builder.to_record_batch()?;
             writer.write(&batch)?;
             writer.close()?;
             self.output_consumer.push_buffer(&buffer, num_records);

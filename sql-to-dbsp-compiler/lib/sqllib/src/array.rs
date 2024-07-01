@@ -1,6 +1,7 @@
 // Array operations
 
-use crate::{some_function2, some_generic_function2};
+use crate::{some_function2, some_generic_function2, Weight};
+use std::collections::{BTreeMap, HashSet};
 use std::hash::Hash;
 use std::ops::Index;
 
@@ -34,32 +35,93 @@ pub fn cardinalityN<T>(value: Option<Vec<T>>) -> Option<i32> {
     Some(value.len() as i32)
 }
 
-pub fn index__<T>(value: &Vec<T>, index: usize) -> T
+// 8 versions of index, depending on
+// nullability of vector
+// nullability of vector element
+// nullability of index
+
+pub fn index___<T>(value: Vec<T>, index: usize) -> Option<T>
 where
     T: Clone,
 {
-    (*value.index(index)).clone()
+    if index >= value.len() {
+        None
+    } else {
+        Some(value.index(index).clone())
+    }
 }
 
-pub fn index__N<T>(value: &Vec<T>, index: Option<usize>) -> T
+pub fn index___N<T>(value: Vec<T>, index: Option<usize>) -> Option<T>
 where
     T: Clone,
 {
-    index__(value, index.unwrap())
+    let index = index?;
+    index___(value, index)
 }
 
-pub fn index_N_<T>(value: &Option<Vec<T>>, index: usize) -> Option<T>
+pub fn index__N_<T>(value: Vec<Option<T>>, index: usize) -> Option<T>
 where
     T: Clone,
 {
-    value.as_ref().map(|value| index__(value, index))
+    if index >= value.len() {
+        None
+    } else {
+        value.index(index).clone()
+    }
 }
 
-pub fn index_N_N<T>(value: &Option<Vec<T>>, index: Option<usize>) -> Option<T>
+pub fn index__N_N<T>(value: Vec<Option<T>>, index: Option<usize>) -> Option<T>
 where
     T: Clone,
 {
-    value.as_ref().map(|value| index__N(value, index))
+    let index = index?;
+    if index >= value.len() {
+        None
+    } else {
+        value.index(index).clone()
+    }
+}
+
+pub fn index_N__<T>(value: Option<Vec<T>>, index: usize) -> Option<T>
+where
+    T: Clone,
+{
+    match value {
+        None => None,
+        Some(value) => index___(value, index),
+    }
+}
+
+pub fn index_N__N<T>(value: Option<Vec<T>>, index: Option<usize>) -> Option<T>
+where
+    T: Clone,
+{
+    let index = index?;
+    match value {
+        None => None,
+        Some(value) => index___(value, index),
+    }
+}
+
+pub fn index_N_N_<T>(value: Option<Vec<Option<T>>>, index: usize) -> Option<T>
+where
+    T: Clone,
+{
+    match value {
+        None => None,
+        Some(value) => index__N_(value, index),
+    }
+}
+
+pub fn index_N_N_N<T>(value: Option<Vec<Option<T>>>, index: Option<usize>) -> Option<T>
+where
+    T: Clone,
+{
+    let index = index?;
+    match value {
+        None => None,
+        Some(value) => index__N_(value, index),
+    }
 }
 
 pub fn array<T>() -> Vec<T> {
@@ -242,7 +304,7 @@ pub fn array_distinct<T>(mut vector: Vec<T>) -> Vec<T>
 where
     T: Eq + Hash + Clone,
 {
-    let mut hset: std::collections::HashSet<T> = std::collections::HashSet::new();
+    let mut hset: HashSet<T> = HashSet::new();
     vector.retain(|v| hset.insert(v.clone()));
     vector
 }
@@ -259,3 +321,222 @@ pub fn sequence__(start: i32, end: i32) -> Vec<i32> {
 }
 
 some_function2!(sequence, i32, i32, Vec<i32>);
+
+// translated from the Calcite implementation to match the behavior
+pub fn arrays_overlapNvec_Nvec_<T>(first: Vec<Option<T>>, second: Vec<Option<T>>) -> Option<bool>
+where
+    T: Eq + Hash,
+{
+    if first.len() > second.len() {
+        return arrays_overlapNvec_Nvec_(second, first);
+    }
+
+    let (smaller, bigger) = (first, second);
+    let mut has_null = false;
+
+    if !smaller.is_empty() && !bigger.is_empty() {
+        let mut shset: HashSet<Option<T>> = HashSet::from_iter(smaller);
+        has_null = shset.remove(&None);
+
+        for element in bigger {
+            if element.is_none() {
+                has_null = true;
+            } else if shset.contains(&element) {
+                return Some(true);
+            }
+        }
+    }
+    if has_null {
+        None
+    } else {
+        Some(true)
+    }
+}
+
+pub fn arrays_overlapNvec_NvecN<T>(
+    first: Vec<Option<T>>,
+    second: Option<Vec<Option<T>>>,
+) -> Option<bool>
+where
+    T: Eq + Hash,
+{
+    arrays_overlapNvec_Nvec_(first, second?)
+}
+
+pub fn arrays_overlapNvecNNvecN<T>(
+    first: Option<Vec<Option<T>>>,
+    second: Option<Vec<Option<T>>>,
+) -> Option<bool>
+where
+    T: Eq + Hash,
+{
+    arrays_overlapNvec_Nvec_(first?, second?)
+}
+
+pub fn arrays_overlapNvecNNvec_<T>(
+    first: Option<Vec<Option<T>>>,
+    second: Vec<Option<T>>,
+) -> Option<bool>
+where
+    T: Eq + Hash,
+{
+    arrays_overlapNvec_Nvec_(first?, second)
+}
+
+pub fn arrays_overlap_vec__vec_<T>(first: Vec<T>, second: Vec<T>) -> bool
+where
+    T: Eq + Hash,
+{
+    let first: HashSet<T> = HashSet::from_iter(first);
+    let second: HashSet<T> = HashSet::from_iter(second);
+
+    first.intersection(&second).count() != 0
+}
+
+pub fn arrays_overlap_vecN_vecN<T>(first: Option<Vec<T>>, second: Option<Vec<T>>) -> Option<bool>
+where
+    T: Eq + Hash,
+{
+    Some(arrays_overlap_vec__vec_(first?, second?))
+}
+
+pub fn arrays_overlap_vec__vecN<T>(first: Vec<T>, second: Option<Vec<T>>) -> Option<bool>
+where
+    T: Eq + Hash,
+{
+    Some(arrays_overlap_vec__vec_(first, second?))
+}
+
+pub fn arrays_overlap_vecN_vec_<T>(first: Option<Vec<T>>, second: Vec<T>) -> Option<bool>
+where
+    T: Eq + Hash,
+{
+    Some(arrays_overlap_vec__vec_(first?, second))
+}
+
+pub fn array_agg<T>(accumulator: &mut Vec<T>, value: T, weight: Weight, distinct: bool) -> Vec<T>
+where
+    T: Clone,
+{
+    if weight < 0 {
+        panic!("Negative weight {:?}", weight);
+    }
+    if distinct {
+        accumulator.push(value.clone())
+    } else {
+        for _i in 0..weight {
+            accumulator.push(value.clone())
+        }
+    }
+    accumulator.to_vec()
+}
+
+pub fn array_agg_opt<T>(
+    accumulator: &mut Vec<Option<T>>,
+    value: Option<T>,
+    weight: Weight,
+    distinct: bool,
+    ignore_nulls: bool,
+) -> Vec<Option<T>>
+where
+    T: Clone,
+{
+    if ignore_nulls && value.is_none() {
+        accumulator.to_vec()
+    } else {
+        array_agg(accumulator, value, weight, distinct)
+    }
+}
+
+/////////////////////////////////////////
+
+// 8 versions of map_index, depending on
+// nullability of map
+// nullability of map value
+// nullability of index
+
+pub fn map_index___<I, T>(value: BTreeMap<I, T>, map_index: I) -> Option<T>
+where
+    I: Ord,
+    T: Clone,
+{
+    value.get(&map_index).cloned()
+}
+
+pub fn map_index___N<I, T>(value: BTreeMap<I, T>, map_index: Option<I>) -> Option<T>
+where
+    I: Ord,
+    T: Clone,
+{
+    let map_index = map_index?;
+    map_index___(value, map_index)
+}
+
+pub fn map_index__N_<I, T>(value: BTreeMap<I, Option<T>>, map_index: I) -> Option<T>
+where
+    I: Ord,
+    T: Clone,
+{
+    match value.get(&map_index) {
+        None => None,
+        Some(result) => result.clone(),
+    }
+}
+
+pub fn map_index__N_N<I, T>(value: BTreeMap<I, Option<T>>, map_index: Option<I>) -> Option<T>
+where
+    I: Ord,
+    T: Clone,
+{
+    let map_index = map_index?;
+    map_index__N_(value, map_index)
+}
+
+pub fn map_index_N__<I, T>(value: Option<BTreeMap<I, T>>, map_index: I) -> Option<T>
+where
+    I: Ord,
+    T: Clone,
+{
+    match value {
+        None => None,
+        Some(value) => map_index___(value, map_index),
+    }
+}
+
+pub fn map_index_N__N<I, T>(value: Option<BTreeMap<I, T>>, map_index: Option<I>) -> Option<T>
+where
+    I: Ord,
+    T: Clone,
+{
+    let map_index = map_index?;
+    match value {
+        None => None,
+        Some(value) => map_index___(value, map_index),
+    }
+}
+
+pub fn map_index_N_N_<I, T>(value: Option<BTreeMap<I, Option<T>>>, map_index: I) -> Option<T>
+where
+    I: Ord,
+    T: Clone,
+{
+    match value {
+        None => None,
+        Some(value) => map_index__N_(value, map_index),
+    }
+}
+
+pub fn map_index_N_N_N<I, T>(
+    value: Option<BTreeMap<I, Option<T>>>,
+    map_index: Option<I>,
+) -> Option<T>
+where
+    I: Ord,
+    T: Clone,
+{
+    let map_index = map_index?;
+    match value {
+        None => None,
+        Some(value) => map_index__N_(value, map_index),
+    }
+}

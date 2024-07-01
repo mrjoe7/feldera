@@ -1,4 +1,4 @@
-/* generated using openapi-typescript-codegen -- do no edit */
+/* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
@@ -10,7 +10,6 @@ import { OpenAPI } from '../core/OpenAPI'
 import { request as __request } from '../core/request'
 export class ApiKeysService {
   /**
-   * List all API keys
    * List all API keys
    * @param name API key name
    * @returns ApiKeyDescr API keys retrieved successfully
@@ -30,7 +29,6 @@ export class ApiKeysService {
   }
   /**
    * Create an API key
-   * Create an API key
    * @param requestBody
    * @returns NewApiKeyResponse API key created successfully.
    * @throws ApiError
@@ -47,7 +45,6 @@ export class ApiKeysService {
     })
   }
   /**
-   * Get an API key description
    * Get an API key description
    * @param apiKeyName Unique API key name
    * @returns ApiKeyDescr API key retrieved successfully
@@ -66,7 +63,6 @@ export class ApiKeysService {
     })
   }
   /**
-   * Delete an API key
    * Delete an API key
    * @param apiKeyName Unique API key name
    * @returns any API key deleted successfully

@@ -1,8 +1,13 @@
 # The base image contains tools to build the code given that
 # we need a Java and Rust compiler to run alongside the pipeline manager
 # as of now. This will change later.
-FROM ubuntu:22.04 AS base
+FROM ubuntu:24.04 AS base
 ENV DEBIAN_FRONTEND noninteractive
+# These two environment variables are used to make openssl-sys pick
+# up libssl-dev and statically link it. Without it, our build defaults
+# to building a vendored version of OpenSSL.
+ENV OPENSSL_NO_VENDOR=1
+ENV OPENSSL_STATIC=1
 RUN apt update --fix-missing && apt install \
   # pkg-config is required for cargo to find libssl
   libssl-dev pkg-config \
@@ -11,11 +16,13 @@ RUN apt update --fix-missing && apt install \
   # To install rust
   curl  \
   # For running the SQL compiler
-  openjdk-19-jre-headless -y \
+  openjdk-21-jre-headless -y \
   # Install locale-gen
   locales \
   # To add the nodesource debian repository
-  ca-certificates gnupg
+  ca-certificates gnupg \
+  # Required by the `metrics-exporter-tcp` crate
+  protobuf-compiler
 
 # Set UTF-8 locale. Needed for the Rust compiler to handle Unicode column names.
 RUN sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
@@ -23,109 +30,110 @@ RUN sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
 ENV LC_ALL en_US.UTF-8
 ENV LANG en_US.UTF-8
 ENV LANGUAGE en_US:en
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 
 # Use cargo-chef to produce a recipe.json file
 # to cache the requisite dependencies
 FROM base as chef
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 RUN /root/.cargo/bin/cargo install cargo-chef
-RUN /root/.cargo/bin/cargo install cargo-make
 WORKDIR app
 
-# Cache dependencies from rust
-FROM chef AS planner
-COPY . .
-RUN /root/.cargo/bin/cargo chef prepare --recipe-path recipe.json
-
-# Use the recipe.json file to build dependencies first and cache that
-# layer for faster incremental builds of source-code only changes
-FROM chef AS builder
-COPY --from=planner /app/recipe.json recipe.json
-RUN /root/.cargo/bin/cargo chef cook --release --recipe-path recipe.json --package=pipeline-manager --no-default-features
-COPY . .
-# web-console build tools:
+# Build web-ui
+FROM base as web-ui-builder
 # - nodejs
 RUN mkdir -p /etc/apt/keyrings
 RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
 ENV NODE_MAJOR=20
 RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
 RUN apt update --fix-missing && apt install nodejs -y
-# - yarn
 RUN npm install --global yarn openapi-typescript-codegen
-RUN /root/.cargo/bin/cargo build --release --package=pipeline-manager --no-default-features
+# - yarn
+COPY web-console/package.json ./web-console/package.json
+COPY web-console/yarn.lock ./web-console/yarn.lock
+RUN cd web-console && yarn install
+# Use a glob here so that the .env file's presence is optional. This should
+# not fail in our CI/CD builds and if it does, we should see a MUIX license
+# error in the UI
+COPY web-console/.env* web-console/
+COPY web-console/public web-console/public
+COPY web-console/src web-console/src
+COPY web-console/.editorconfig web-console/
+COPY web-console/.eslintrc.json web-console/
+COPY web-console/.prettierrc.js web-console/
+COPY web-console/next-env.d.ts ./web-console/next-env.d.ts
+COPY web-console/next.config.js ./web-console/next.config.js
+COPY web-console/next.d.ts ./web-console/next.d.ts
+COPY web-console/tsconfig.json ./web-console/tsconfig.json
+RUN cd web-console && yarn build
+
+# Cache dependencies from rust
+FROM chef AS planner
+COPY Cargo.toml Cargo.toml
+COPY Cargo.lock Cargo.lock
+COPY crates crates
+RUN mkdir sql-to-dbsp-compiler
+COPY sql-to-dbsp-compiler/lib sql-to-dbsp-compiler/lib
+RUN /root/.cargo/bin/cargo chef prepare --recipe-path recipe.json
+
+# Use the recipe.json file to build dependencies first and cache that
+# layer for faster incremental builds of source-code only changes
+FROM chef AS builder
+ENV CARGO_INCREMENTAL=0
+COPY --from=planner /app/recipe.json recipe.json
+RUN /root/.cargo/bin/cargo chef cook --release --recipe-path recipe.json --bin=pipeline-manager --features=pg-embed
+COPY Cargo.toml Cargo.toml
+COPY Cargo.lock Cargo.lock
+COPY crates crates
+RUN mkdir sql-to-dbsp-compiler || true
+COPY sql-to-dbsp-compiler/lib sql-to-dbsp-compiler/lib
+COPY --from=web-ui-builder /web-console/out web-console-out
+ENV WEBUI_BUILD_DIR=/app/web-console-out
+RUN /root/.cargo/bin/cargo build --release --bin=pipeline-manager --features=pg-embed
 
 # Java build can be performed in parallel
 FROM base as javabuild
 RUN apt install maven -y
 RUN mkdir sql
 COPY sql-to-dbsp-compiler /sql/sql-to-dbsp-compiler
-RUN cd /sql/sql-to-dbsp-compiler/SQL-compiler && mvn -ntp -DskipTests package
+RUN --mount=type=cache,target=/root/.m2 \
+    cd /sql/sql-to-dbsp-compiler/SQL-compiler && mvn -ntp -DskipTests package
 
 # Minimal image for running the pipeline manager
 FROM base as release
-ENV PATH="$PATH:/root/.cargo/bin"
 # Pipeline manager binary
+RUN useradd -ms /bin/bash feldera
+USER feldera
+WORKDIR /home/feldera
 COPY --from=builder /app/target/release/pipeline-manager pipeline-manager
 # SQL compiler uber jar
-RUN mkdir -p database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/target
-COPY --from=javabuild /sql/sql-to-dbsp-compiler/SQL-compiler/target/sql2dbsp-jar-with-dependencies.jar database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/target/sql2dbsp-jar-with-dependencies.jar
+RUN mkdir -p lib/sql-to-dbsp-compiler/SQL-compiler/target
+COPY --from=javabuild /sql/sql-to-dbsp-compiler/SQL-compiler/target/sql2dbsp-jar-with-dependencies.jar lib/sql-to-dbsp-compiler/SQL-compiler/target/sql2dbsp-jar-with-dependencies.jar
+
+# Reuse `Cargo.lock` to ensure consistent crate versions.
+RUN mkdir -p .feldera/cargo_workspace
+COPY --chown=feldera Cargo.lock .feldera/cargo_workspace/Cargo.lock
+
 # The crates needed for the SQL compiler
-COPY crates/dbsp database-stream-processor/crates/dbsp
-COPY crates/pipeline-types database-stream-processor/crates/pipeline-types
-COPY crates/adapters database-stream-processor/crates/adapters
+COPY crates/dbsp lib/crates/dbsp
+COPY crates/pipeline-types lib/crates/pipeline-types
+COPY crates/adapters lib/crates/adapters
 # Storage crate got folded into the dbsp crate for now. Revert if this changes.
-# COPY crates/feldera-storage database-stream-processor/crates/feldera-storage
-COPY README.md database-stream-processor/README.md
-RUN mkdir -p database-stream-processor/sql-to-dbsp-compiler/lib
+# COPY crates/feldera-storage lib/crates/feldera-storage
+COPY README.md lib/README.md
+RUN mkdir -p lib/sql-to-dbsp-compiler/lib
 
 # Copy over the rust code and sql-to-dbsp script
-COPY sql-to-dbsp-compiler/lib database-stream-processor/sql-to-dbsp-compiler/lib
-COPY sql-to-dbsp-compiler/temp database-stream-processor/sql-to-dbsp-compiler/temp
-COPY sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp
+COPY sql-to-dbsp-compiler/lib lib/sql-to-dbsp-compiler/lib
+COPY sql-to-dbsp-compiler/temp lib/sql-to-dbsp-compiler/temp
+COPY sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp lib/sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp
+
+# Install cargo and rust for this non-root user
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="$PATH:/home/feldera/.cargo/bin"
 # Run the precompile phase to speed up Rust compilations during deployment
-RUN ./pipeline-manager --bind-address=0.0.0.0 --api-server-working-directory=/working-dir --compiler-working-directory=/working-dir --sql-compiler-home=/database-stream-processor/sql-to-dbsp-compiler --dbsp-override-path=/database-stream-processor --precompile
+RUN ./pipeline-manager --bind-address=0.0.0.0 --sql-compiler-home=/home/feldera/lib/sql-to-dbsp-compiler --dbsp-override-path=/home/feldera/lib --precompile
 ENV BANNER_ADDR localhost
-ENTRYPOINT ["./pipeline-manager", "--bind-address=0.0.0.0", "--api-server-working-directory=/working-dir", "--compiler-working-directory=/working-dir", "--runner-working-directory=/working-dir", "--sql-compiler-home=/database-stream-processor/sql-to-dbsp-compiler", "--dbsp-override-path=/database-stream-processor", "--allowed-origins", "https://www.feldera.com", "--allowed-origins", "http://localhost:8080"]
-
-# Standalone api-server
-FROM gcr.io/distroless/cc-debian12 AS api-server
-COPY --from=builder /app/target/release/api-server api-server
-ENV BANNER_ADDR localhost
-ENTRYPOINT ["./api-server", "--bind-address=0.0.0.0", "--api-server-working-directory=/working-dir"]
-
-# Standalone compiler-server
-FROM base as compiler-server
-ENV PATH="$PATH:/root/.cargo/bin"
-COPY --from=builder /app/target/release/compiler-server compiler-server
-# SQL compiler uber jar
-RUN mkdir -p database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/target
-COPY --from=javabuild /sql/sql-to-dbsp-compiler/SQL-compiler/target/sql2dbsp-jar-with-dependencies.jar database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/target/sql2dbsp-jar-with-dependencies.jar
-# The crates needed for the SQL compiler
-COPY crates/dbsp database-stream-processor/crates/dbsp
-COPY crates/pipeline-types database-stream-processor/crates/pipeline-types
-COPY crates/adapters database-stream-processor/crates/adapters
-# Storage crate got folded into the dbsp crate for now. Revert if this changes.
-# COPY crates/feldera-storage database-stream-processor/crates/feldera-storage
-COPY README.md database-stream-processor/README.md
-RUN mkdir -p database-stream-processor/sql-to-dbsp-compiler/lib
-# Copy over the rust code and sql-to-dbsp script
-COPY sql-to-dbsp-compiler/lib database-stream-processor/sql-to-dbsp-compiler/lib
-COPY sql-to-dbsp-compiler/temp database-stream-processor/sql-to-dbsp-compiler/temp
-COPY sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp
-# Run the precompile phase to speed up Rust compilations during deployment
-# TODO: disabling this to keep compiler image sizes small
-# RUN ./compiler-server --compiler-working-directory=/working-dir --sql-compiler-home=/database-stream-processor/sql-to-dbsp-compiler --dbsp-override-path=/database-stream-processor --precompile
-ENTRYPOINT ["./compiler-server", "--compiler-working-directory=/working-dir", "--sql-compiler-home=/database-stream-processor/sql-to-dbsp-compiler", "--dbsp-override-path=/database-stream-processor"]
-
-# Standalone local-runner
-FROM gcr.io/distroless/cc-debian12 AS local-runner
-COPY --from=builder /app/target/release/local-runner local-runner
-ENTRYPOINT ["./local-runner", "--runner-working-directory=/working-dir"]
-
-# DB Migrations
-FROM gcr.io/distroless/cc-debian12 AS migrations
-COPY --from=builder /app/target/release/migrations migrations
-ENTRYPOINT ["./migrations"]
+ENTRYPOINT ["./pipeline-manager", "--bind-address=0.0.0.0", "--sql-compiler-home=/home/feldera/lib/sql-to-dbsp-compiler", "--dbsp-override-path=/home/feldera/lib", "--allowed-origins", "https://www.feldera.com", "--allowed-origins", "http://localhost:8080"]
 
 ##### The stages below are used to build the demo container
 
@@ -143,7 +151,7 @@ COPY ./demo/project_demo00-SecOps/simulator/ .
 RUN /root/.cargo/bin/cargo build --release
 
 # The dev target adds an rpk client and demo projects
-FROM ubuntu:22.04 AS client
+FROM ubuntu:24.04 AS client
 ENV DEBIAN_FRONTEND noninteractive
 ENV PATH="$PATH:/root/.cargo/bin"
 COPY demo demo
@@ -162,10 +170,11 @@ RUN apt update && apt install pkg-config \
   # Install snowsql
   && curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.28-linux_x86_64.bash \
   && SNOWSQL_DEST=/bin SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.28-linux_x86_64.bash \
-  && pip3 install snowflake-connector-python \
+  && pip3 install --break-system-packages snowflake-connector-python \
   # TODO: only required for running the fraud detection demo. Remove when we clean that up.
-  && pip3 install gdown \
-  && pip3 install "psycopg[binary]" \
+  && pip3 install --break-system-packages gdown \
+  && pip3 install --break-system-packages "psycopg[binary]" \
+  && pip3 install --break-system-packages kafka-python \
   # cleanup packages we don't need anymore
   && apt remove python3-pip unzip pkg-config -y && apt autoremove -y
 CMD bash

@@ -13,19 +13,13 @@ pub mod timestamp;
 
 use casts::cast_to_decimal_decimal;
 pub use geopoint::GeoPoint;
-pub use interval::LongInterval;
-pub use interval::ShortInterval;
-use num_traits::Pow;
-use num_traits::Zero;
+pub use interval::{LongInterval, ShortInterval};
 pub use source::{SourcePosition, SourcePositionRange};
-pub use timestamp::Date;
-pub use timestamp::Time;
-pub use timestamp::Timestamp;
+pub use timestamp::{Date, Time, Timestamp};
 
-use dbsp::algebra::{OrdIndexedZSetFactories, OrdZSetFactories};
+use dbsp::algebra::{OrdIndexedZSetFactories, OrdZSetFactories, UnsignedPrimInt};
 use dbsp::dynamic::{DowncastTrait, DynData, Erase};
-use dbsp::trace::ord::vec::indexed_wset_batch::VecIndexedWSetBuilder;
-use dbsp::trace::ord::vec::wset_batch::VecWSetBuilder;
+use dbsp::trace::ord::{OrdIndexedWSetBuilder, OrdWSetBuilder, OrdWSetFactories};
 use dbsp::trace::BatchReaderFactories;
 use dbsp::typed_batch::TypedBatch;
 use dbsp::{
@@ -36,12 +30,60 @@ use dbsp::{
     utils::*,
     DBData, OrdIndexedZSet, OrdZSet, OutputHandle, SetHandle, ZSetHandle, ZWeight,
 };
-use num::{Signed, ToPrimitive};
+use itertools::Itertools;
+use num::{PrimInt, Signed, ToPrimitive};
+use num_traits::{Pow, Zero};
 use rust_decimal::{Decimal, MathematicalOps};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Add, Deref, Neg};
 use std::str::FromStr;
+
+/// Convert a value of a SQL data type to an integer
+/// that preserves ordering.  Used for partitioned_rolling_aggregates
+pub trait ToInteger<T>
+where
+    T: PrimInt,
+{
+    fn to_integer(&self) -> T;
+}
+
+/// Trait that provides the inverse functionality of the ToInteger trait.
+/// Used for partitioned_rolling_aggregates
+pub trait FromInteger<T>
+where
+    T: PrimInt,
+{
+    fn from_integer(value: &T) -> Self;
+}
+
+impl<T> ToInteger<T> for T
+where
+    T: PrimInt,
+{
+    fn to_integer(&self) -> T {
+        *self
+    }
+}
+
+impl<T> FromInteger<T> for T
+where
+    T: PrimInt,
+{
+    fn from_integer(value: &T) -> Self {
+        *value
+    }
+}
+
+/// Trait used to convert values to window bounds in OVER
+/// queries.  partitioned_rolling_aggregates always requires
+/// unsigned bounds.
+pub trait ToWindowBound<T>
+where
+    T: UnsignedPrimInt,
+{
+    fn to_bound(&self) -> T;
+}
 
 pub type Weight = i64; // Default weight type
 pub type WSet<D> = OrdZSet<D>;
@@ -600,6 +642,18 @@ macro_rules! for_all_numeric_operator {
     };
 }
 
+#[macro_export]
+macro_rules! for_all_comparable_operator {
+    ($func_name: ident) => {
+        for_all_numeric_operator!($func_name);
+        some_operator!($func_name, Timestamp, Timestamp, Timestamp);
+        some_operator!($func_name, Date, Date, Date);
+        some_operator!($func_name, Time, Time, Time);
+        some_operator!($func_name, ShortInterval, ShortInterval, ShortInterval);
+        some_operator!($func_name, LongInterval, LongInterval, LongInterval);
+    };
+}
+
 impl<T> Semigroup<Option<T>> for DefaultOptSemigroup<T>
 where
     T: SemigroupValue,
@@ -647,12 +701,21 @@ where
     }
 }
 
+#[derive(Clone)]
+pub struct ConcatSemigroup<V>(PhantomData<V>);
+
+impl<V> Semigroup<Vec<V>> for ConcatSemigroup<Vec<V>>
+where
+    V: Clone + Ord,
+{
+    fn combine(left: &Vec<V>, right: &Vec<V>) -> Vec<V> {
+        left.iter().merge(right).cloned().collect()
+    }
+}
+
 #[inline(always)]
 pub fn wrap_bool(b: Option<bool>) -> bool {
-    match b {
-        Some(x) => x,
-        _ => false,
-    }
+    b.unwrap_or_default()
 }
 
 #[inline(always)]
@@ -946,6 +1009,26 @@ where
     }
 }
 
+#[inline(always)]
+pub fn plus_Time_ShortInterval(left: Time, right: ShortInterval) -> Time {
+    left + right
+}
+
+#[inline(always)]
+pub fn minus_Time_ShortInterval(left: Time, right: ShortInterval) -> Time {
+    left - right
+}
+
+#[inline(always)]
+pub fn plus_Time_LongInterval(left: Time, _: LongInterval) -> Time {
+    left
+}
+
+#[inline(always)]
+pub fn minus_Time_LongInterval(left: Time, _: LongInterval) -> Time {
+    left
+}
+
 pub fn times_ShortInterval_i64(left: ShortInterval, right: i64) -> ShortInterval {
     left * right
 }
@@ -969,6 +1052,18 @@ pub fn times_i32_ShortInterval(left: i32, right: ShortInterval) -> ShortInterval
 }
 
 some_polymorphic_function2!(times, i32, i32, ShortInterval, ShortInterval, ShortInterval);
+
+pub fn times_i32_LongInterval(left: i32, right: LongInterval) -> LongInterval {
+    right * left
+}
+
+some_polymorphic_function2!(times, i32, i32, LongInterval, LongInterval, LongInterval);
+
+pub fn times_LongInterval_i32(left: LongInterval, right: i32) -> LongInterval {
+    left * right
+}
+
+some_polymorphic_function2!(times, LongInterval, LongInterval, i32, i32, LongInterval);
 
 /***** decimals ***** */
 
@@ -1434,8 +1529,8 @@ where
     T: DBData + 'static,
     F: Fn(&D) -> T,
 {
-    let factories = OrdZSetFactories::new::<T, (), ZWeight>();
-    let mut builder = VecWSetBuilder::with_capacity(&factories, (), data.len());
+    let factories = OrdWSetFactories::new::<T, (), ZWeight>();
+    let mut builder = OrdWSetBuilder::with_capacity(&factories, (), data.len());
     let mut cursor = data.cursor();
     while cursor.key_valid() {
         let mut weight = *cursor.weight().deref();
@@ -1455,7 +1550,7 @@ where
 {
     let factories = OrdZSetFactories::new::<D, (), ZWeight>();
 
-    let mut builder = VecWSetBuilder::with_capacity(&factories, (), data.len());
+    let mut builder = OrdWSetBuilder::with_capacity(&factories, (), data.len());
 
     let mut cursor = data.cursor();
     while cursor.key_valid() {
@@ -1481,7 +1576,7 @@ where
     F: Fn((&K, &D), &T) -> bool,
 {
     let factories = OrdIndexedZSetFactories::new::<K, D, ZWeight>();
-    let mut builder = VecIndexedWSetBuilder::with_capacity(&factories, (), data.len());
+    let mut builder = OrdIndexedWSetBuilder::with_capacity(&factories, (), data.len());
 
     let mut cursor = data.cursor();
     while cursor.key_valid() {
@@ -1548,6 +1643,7 @@ pub fn must_equal<K>(left: &WSet<K>, right: &WSet<K>) -> bool
 where
     K: DBData + Clone,
 {
+    // println!("L={:?}\nR={:?}\n", left, right);
     let diff = left.add_by_ref(&right.neg_by_ref());
     if diff.is_zero() {
         return true;

@@ -46,7 +46,6 @@ use actix_web::{
 };
 use anyhow::Error as AnyError;
 use dbsp::{operator::sample::MAX_QUANTILES, DetailedError};
-use log::{error, log, warn, Level};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::{
@@ -55,6 +54,7 @@ use std::{
     fmt::{Display, Error as FmtError, Formatter},
     sync::Arc,
 };
+use tracing::{error, warn, Level};
 use utoipa::ToSchema;
 
 pub const MAX_REPORTED_PARSE_ERRORS: usize = 1_000;
@@ -83,6 +83,18 @@ where
     }
 }
 
+macro_rules! dyn_event {
+    ($lvl:ident, $($arg:tt)+) => {
+        match $lvl {
+            ::tracing::Level::TRACE => ::tracing::trace!($($arg)+),
+            ::tracing::Level::DEBUG => ::tracing::debug!($($arg)+),
+            ::tracing::Level::INFO => ::tracing::info!($($arg)+),
+            ::tracing::Level::WARN => ::tracing::warn!($($arg)+),
+            ::tracing::Level::ERROR => ::tracing::error!($($arg)+),
+        }
+    };
+}
+
 impl ErrorResponse {
     pub fn from_anyerror(error: &AnyError) -> Self {
         let message = error.to_string();
@@ -103,9 +115,9 @@ impl ErrorResponse {
         E: DetailedError,
     {
         let result = Self::from_error_nolog(error);
-
-        log!(
-            error.log_level(),
+        let level = error.log_level();
+        dyn_event!(
+            level,
             "[HTTP error response] {}: {}",
             result.error_code,
             result.message
@@ -168,13 +180,16 @@ pub enum PipelineError {
     NeighborhoodNotSupported,
     ControllerError {
         // Fold `ControllerError` directly into `PipelineError` to simplify
-        // the error hierarchy from the user's pespective.
+        // the error hierarchy from the user's perspective.
         #[serde(flatten)]
         error: Arc<ControllerError>,
     },
     ParseErrors {
         num_errors: u64,
         errors: Vec<ParseError>,
+    },
+    HeapProfilerError {
+        error: String,
     },
 }
 
@@ -248,6 +263,9 @@ impl Display for PipelineError {
                     Ok(())
                 }
             }
+            Self::HeapProfilerError {error} => {
+                write!(f, "Heap profiler error: {error}.")
+            }
         }
     }
 }
@@ -270,15 +288,16 @@ impl DetailedError for PipelineError {
             Self::InvalidNeighborhoodSpec { .. } => Cow::from("InvalidNeighborhoodSpec"),
             Self::ParseErrors { .. } => Cow::from("ParseErrors"),
             Self::ControllerError { error } => error.error_code(),
+            Self::HeapProfilerError { .. } => Cow::from("HeapProfilerError"),
         }
     }
 
     fn log_level(&self) -> Level {
         match self {
-            Self::Initializing => Level::Info,
-            Self::Terminating => Level::Info,
+            Self::Initializing => Level::INFO,
+            Self::Terminating => Level::INFO,
             Self::ControllerError { error } => error.log_level(),
-            _ => Level::Error,
+            _ => Level::ERROR,
         }
     }
 }
@@ -322,6 +341,7 @@ impl ResponseError for PipelineError {
             Self::NumQuantilesOutOfRange { .. } => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::InvalidNeighborhoodSpec { .. } => StatusCode::BAD_REQUEST,
             Self::ParseErrors { .. } => StatusCode::BAD_REQUEST,
+            Self::HeapProfilerError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::ControllerError { error } => error.status_code(),
         }
     }

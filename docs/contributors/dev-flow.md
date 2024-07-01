@@ -8,7 +8,7 @@ Spin up the Devcontainer, e.g. by opening the Feldera repository in VS Code with
 
 On your first launch you might need to change the ownership of the files:
 ```bash
-sudo chown -R user /workspaces/dbsp
+sudo chown -R user /workspaces/feldera
 ```
 
 Build the SQL Compiler:
@@ -86,7 +86,7 @@ TODO
 
 ## Launch the prepared demo
 
-Refer to the [Get Started page](/docs/intro) for basic instructions on spinning up and interacting with the demos from a separate docker-compose.
+Refer to the [Get Started page](/docs/docker) for basic instructions on spinning up and interacting with the demos from a separate docker-compose.
 
 ## Manually starting the demos
 

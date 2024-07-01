@@ -17,6 +17,7 @@ use crate::dynamic::ClonableTrait;
 use std::{hash::Hash, panic::Location};
 
 circuit_cache_key!(ShardId<C, D>((GlobalNodeId, ShardingPolicy) => Stream<C, D>));
+circuit_cache_key!(UnshardId<C, D>(GlobalNodeId => Stream<C, D>));
 
 // An attempt to future-proof the design for when we support multiple sharding
 // disciplines.
@@ -109,6 +110,11 @@ where
                                     sharding_policy(self.circuit()),
                                 )),
                                 output.clone(),
+                            );
+
+                            self.circuit().cache_insert(
+                                UnshardId::new(output.origin_node_id().clone()),
+                                self.clone(),
                             );
 
                             output
@@ -205,6 +211,24 @@ where
             .unwrap_or_else(|| self.clone())
     }
 
+    /// Returns the unsharded version of the stream if it exists, and otherwise
+    /// `self`.
+    pub fn try_unsharded_version(&self) -> Self {
+        self.circuit()
+            .cache_get(&UnshardId::new(self.origin_node_id().clone()))
+            .unwrap_or_else(|| self.clone())
+    }
+
+    /// Returns `true` if this stream is sharded.
+    pub fn is_sharded(&self) -> bool {
+        self.circuit()
+            .cache_get(&ShardId::<C, T>::new((
+                self.origin_node_id().clone(),
+                sharding_policy(self.circuit()),
+            )))
+            .map_or(false, |sharded| sharded.ptr_eq(self))
+    }
+
     /// Marks `self` as sharded if `input` has a sharded version of itself
     pub fn mark_sharded_if<C2, U>(&self, input: &Stream<C2, U>)
     where
@@ -270,7 +294,8 @@ mod tests {
             for _ in 0..3 {
                 circuit.step().unwrap();
             }
-        });
+        })
+        .expect("failed to run runtime");
 
         hruntime.join().unwrap();
     }

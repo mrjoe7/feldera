@@ -1,3 +1,4 @@
+use crate::catalog::ArrowStream;
 use crate::{
     catalog::{DeCollectionStream, RecordFormat},
     static_compile::deinput::{
@@ -141,7 +142,18 @@ where
             RecordFormat::Parquet(_) => {
                 todo!()
             }
+            #[cfg(feature = "with-avro")]
+            RecordFormat::Avro => {
+                todo!()
+            }
         }
+    }
+
+    fn configure_arrow_deserializer(
+        &self,
+        _config: SqlSerdeConfig,
+    ) -> Result<Box<dyn ArrowStream>, ControllerError> {
+        todo!()
     }
 }
 

@@ -24,7 +24,7 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -34,7 +34,7 @@ import org.dbsp.util.Linq;
 import javax.annotation.Nullable;
 import java.util.List;
 
-public class DBSPSumOperator extends DBSPOperator {
+public final class DBSPSumOperator extends DBSPOperator {
     public DBSPSumOperator(CalciteObject node, List<DBSPOperator> inputs) {
         super(node, "sum", null, inputs.get(0).outputType, true);
         for (DBSPOperator op: inputs) {

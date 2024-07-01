@@ -1,19 +1,20 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.ir.DBSPAggregate;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
 import org.dbsp.util.IIndentStream;
 
 import javax.annotation.Nullable;
 import java.util.Objects;
 
-/**
- * Base class for operators that perform some form of aggregation.
- */
+/*** Base class for operators that perform some form of aggregation. */
 public abstract class DBSPAggregateOperatorBase extends DBSPUnaryOperator {
+    // Initially 'aggregate' is not null, and 'function' is null.
+    // After lowering these two are swapped.
     @Nullable
     public final DBSPAggregate aggregate;
     public final boolean isLinear;
@@ -40,13 +41,19 @@ public abstract class DBSPAggregateOperatorBase extends DBSPUnaryOperator {
         }
     }
 
-    @Override
-    public boolean hasFunction() {
-        return true;
-    }
-
     public DBSPAggregate getAggregate() {
         return Objects.requireNonNull(this.aggregate);
+    }
+
+    @Override
+    public boolean equivalent(DBSPOperator other) {
+        if (!super.equivalent(other))
+            return false;
+        DBSPPartitionedRollingAggregateOperator otherOperator = other.as(DBSPPartitionedRollingAggregateOperator.class);
+        if (otherOperator == null)
+            return false;
+        return this.isLinear == otherOperator.isLinear &&
+                EquivalenceContext.equiv(this.aggregate, otherOperator.aggregate);
     }
 
     @Override

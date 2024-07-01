@@ -23,18 +23,25 @@
 
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 
-public class DBSPFlatMapOperator extends DBSPUnaryOperator {
+public final class DBSPFlatMapOperator extends DBSPUnaryOperator {
+    // Initially the expression is DBSPFlatmap, but later it is lowered
+    // into a lambda of the form
+    // |x| -> {
+    //   let array: &Vec<i32> = &(*x).A;
+    //   let array_clone: Vec<i32> = (*array).clone();
+    //   array_clone.clone().into_iter().map(move |e: X| ... )
+    // }
     public DBSPFlatMapOperator(CalciteObject node, DBSPExpression expression,
                                DBSPTypeZSet outputType, DBSPOperator input) {
         super(node, "flat_map", expression, outputType, true, input);

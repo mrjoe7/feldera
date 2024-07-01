@@ -83,10 +83,10 @@ public class ArrayFunctionsTests extends SqlIoTest {
         );
     }
 
-    @Test @Ignore("https://github.com/feldera/feldera/issues/1474")
+    @Test
     public void testArrayRepeat3() {
         this.qs("""
-                SELECT array_repeat( 'a', 6);
+                SELECT array_repeat('a', 6);
                  array_repeat
                 --------------
                  { a, a, a, a, a, a}
@@ -186,28 +186,25 @@ public class ArrayFunctionsTests extends SqlIoTest {
         );
     }
 
-    @Test @Ignore("https://github.com/feldera/feldera/issues/1475")
+    @Test
     public void testArrayPositionDiffTypes() {
-        this.qs("""
-                SELECT array_position(ARRAY [1, 2, 3, 4], 1e0);
-                 array_position
-                ----------------
-                 1
-                (1 row)
-                
-                SELECT array_position(ARRAY [1.0, 2.0, 3.0, 4.0], 1e0);
-                 array_position
-                ----------------
-                 1
-                (1 row)
-                
-                SELECT array_position(ARRAY [1.0, 2.0, 3.0, 4.0], 0e0);
-                 array_position
-                ----------------
-                 0
-                (1 row)
-                """
-        );
+        this.queryFailingInCompilation("SELECT array_position(ARRAY [1, 2, 3, 4], 1e0)", "different types", false);
+        this.queryFailingInCompilation("SELECT array_position(ARRAY [1.0, 2.0, 3.0, 4.0], 1e0)", "different types", false);
+        this.queryFailingInCompilation("SELECT array_position(ARRAY [1.0, 2.0, 3.0, 4.0], 0e0)", "different types", false);
+    }
+
+    @Test
+    public void testArrayContainsDiffTypes() {
+        this.queryFailingInCompilation("SELECT array_contains(ARRAY [1, 2, 3, 4], 1e0)", "different types", false);
+        this.queryFailingInCompilation("SELECT array_contains(ARRAY [1.0, 2.0, 3.0, 4.0], 1e0)", "different types", false);
+        this.queryFailingInCompilation("SELECT array_contains(ARRAY [1.0, 2.0, 3.0, 4.0], 0e0)", "different types", false);
+    }
+
+    @Test
+    public void testArrayRemoveDiffTypes() {
+        this.queryFailingInCompilation("SELECT array_remove(ARRAY [1, 2, 3, 4], 1e0)", "different types", false);
+        this.queryFailingInCompilation("SELECT array_remove(ARRAY [1.0, 2.0, 3.0, 4.0], 1e0)", "different types", false);
+        this.queryFailingInCompilation("SELECT array_remove(ARRAY [1.0, 2.0, 3.0, 4.0], 0e0)", "different types", false);
     }
 
     @Test
@@ -269,40 +266,13 @@ public class ArrayFunctionsTests extends SqlIoTest {
         );
     }
 
-    @Test @Ignore("https://github.com/feldera/feldera/issues/1465")
+    @Test
     public void testNullArray() {
-        this.qs("""
-                SELECT array_position(null, 3);
-                 array_position
-                ----------------
-                 NULL
-                (1 row)
-                
-                SELECT array_max(NULL);
-                 array_max
-                -----------
-                 NULL
-                (1 row)
-                
-                SELECT array_min(NULL);
-                 array_max
-                -----------
-                 NULL
-                (1 row)
-                
-                SELECT array_prepend(null, 1);
-                 array_prepend
-                --------------
-                 NULL
-                (1 row)
-                
-                SELECT array_remove(NULL, 1);
-                 array_remove
-                --------------
-                 NULL
-                (1 row)
-                """
-        );
+        this.queryFailingInCompilation("SELECT array_position(null, 3)", "Illegal use of 'NULL'");
+        this.queryFailingInCompilation("SELECT array_max(NULL)", "Cannot apply 'ARRAY_MAX' to arguments of type");
+        this.queryFailingInCompilation("SELECT array_min(NULL)", "Cannot apply 'ARRAY_MIN' to arguments of type");
+        this.queryFailingInCompilation("SELECT array_prepend(null, 1)", "Illegal use of 'NULL'");
+        this.queryFailingInCompilation("SELECT array_remove(NULL, 1)", "Illegal use of 'NULL'");
     }
 
     @Test
@@ -556,6 +526,19 @@ public class ArrayFunctionsTests extends SqlIoTest {
         );
     }
 
+    // Test for https://github.com/feldera/feldera/issues/1472
+    @Test
+    public void testArrayCompact2() {
+        this.qs("""
+                SELECT array_compact(ARRAY [NULL]);
+                 array_compact
+                ---------------
+                 {}
+                (1 row)
+                """, false
+        );
+    }
+
     @Test
     public void testArrayCompact() {
         this.qs("""
@@ -630,19 +613,19 @@ public class ArrayFunctionsTests extends SqlIoTest {
                 -----------------
                  {2,4,6,8}
                 (1 row)
-                            
+                
                 SELECT array_distinct(ARRAY [2, 2, 2, 2]);
                  array_distinct
                 ---------------
                  {2}
                 (1 row)
-                            
+                
                 SELECT array_distinct(ARRAY ['a', 'b', 'c', 'b', 'a']);
                  array_distinct
                 -----------------
                  { a, b, c}
                 (1 row)
-                            
+                
                 SELECT array_distinct(ARRAY [null, null, null]);
                  array_distinct
                 ---------------
@@ -680,5 +663,179 @@ public class ArrayFunctionsTests extends SqlIoTest {
                 (1 row)
                 """
         );
+    }
+
+    @Test
+    public void testArraysOverlap() {
+        this.qs("""
+                SELECT ARRAYS_OVERLAP(ARRAY [1, 2, 3], ARRAY [2, 4]);
+                 arrays_overlap
+                ----------------
+                    true
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(ARRAY [1, 2, 3], cast(null as integer array));
+                 arrays_overlap
+                ----------------
+                    NULL
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(ARRAY [1, 2, 3, null], cast(null as integer array));
+                 arrays_overlap
+                ----------------
+                    NULL
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(cast(null as integer array), ARRAY [1, 2, 3]);
+                 arrays_overlap
+                ----------------
+                    NULL
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(cast(null as integer array), ARRAY [1, 2, 3, null]);
+                 arrays_overlap
+                ----------------
+                    NULL
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(ARRAY [null, 1], ARRAY [2, 1]);
+                 arrays_overlap
+                ----------------
+                 true
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(ARRAY [1, 2], ARRAY [1, null]);
+                 arrays_overlap
+                ----------------
+                 true
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(ARRAY [null, 1], ARRAY [2, 1, null]);
+                 arrays_overlap
+                ----------------
+                 true
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(ARRAY [null, 1], ARRAY [2, 3, null]);
+                 arrays_overlap
+                ----------------
+                 NULL
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(cast(null as integer array), cast(null as integer array));
+                 arrays_overlap
+                ----------------
+                 NULL
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(array[1, 2], array[3]);
+                 arrays_overlap
+                ----------------
+                 false
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(array[3], array[2]);
+                 arrays_overlap
+                ----------------
+                 false
+                (1 row)
+                
+                SELECT ARRAYS_OVERLAP(array [3], array [1, null]);
+                 arrays_overlap
+                ----------------
+                 NULL
+                (1 row)
+                """
+        );
+    }
+
+    @Test
+    public void testArraysOverlapDiffTypes() {
+        // fails for the Calcite optimized version as Calcite returns false
+        this.queryFailingInCompilation("SELECT ARRAYS_OVERLAP(ARRAY [1, 2, 3], ARRAY [2e0, 4e0])", "different types", false);
+        this.queryFailingInCompilation("SELECT ARRAYS_OVERLAP(ARRAY [1, 2, 3], ARRAY [2.0, 4.0])", "different types", false);
+    }
+
+    @Test @Ignore("similar to: https://github.com/feldera/feldera/issues/1465")
+    public void testArraysOverlapNull() {
+        this.qs("""
+                SELECT ARRAYS_OVERLAP(null, null);
+                 arrays_overlap
+                ----------------
+                 NULL
+                (1 row)
+                """
+        );
+    }
+
+    @Test
+    public void testArrayAgg() {
+        // Tests from https://cloud.google.com/bigquery/docs/reference/standard-sql/aggregate_functions#array_agg
+        this.qs("""
+                SELECT ARRAY_AGG(x) AS array_agg FROM UNNEST(ARRAY [2, 1,-2, 3, -2, 1, 2]) AS x;
+                +-------------------------+
+                | array_agg               |
+                +-------------------------+
+                | {-2, -2, 1, 1, 2, 2, 3} |
+                +-------------------------+
+                (1 row)
+                
+                SELECT ARRAY_AGG(DISTINCT x) AS array_agg
+                FROM UNNEST(ARRAY [2, 1, -2, 3, -2, 1, 2]) AS x;
+                +---------------+
+                | array_agg     |
+                +---------------+
+                | {-2, 1, 2, 3} |
+                +---------------+
+                (1 row)
+                
+                SELECT ARRAY_AGG(x IGNORE NULLS) AS array_agg
+                FROM UNNEST(ARRAY [NULL, 1, -2, 3, -2, 1, NULL]) AS x;
+                +-------------------+
+                | array_agg         |
+                +-------------------+
+                | {-2, -2, 1, 1, 3} |
+                +-------------------+
+                (1 row)
+                
+                WITH vals AS
+                  (
+                    SELECT 1 x, 'a' y UNION ALL
+                    SELECT 1 x, 'b' y UNION ALL
+                    SELECT 2 x, 'a' y UNION ALL
+                    SELECT 2 x, 'c' y
+                  )
+                SELECT x, ARRAY_AGG(y) as array_agg
+                FROM vals
+                GROUP BY x;
+                +---------------+
+                | x | array_agg |
+                +---------------+
+                | 1 | { a, b}   |
+                | 2 | { a, c}   |
+                +---------------+
+                (1 row)""");
+    }
+
+    @Test
+    public void testOverArrayAgg() {
+        // The order of the elements in the array is non-deterministic
+        this.qs("""
+                SELECT
+                  x,
+                  ARRAY_AGG(x) OVER (ORDER BY ABS(x)) AS array_agg
+                FROM UNNEST(ARRAY [2, 1, -2, 3, -2, 1, 2]) AS x;
+                +----+-------------------------+
+                | x  | array_agg               |
+                +----+-------------------------+
+                | 1  | {1, 1}                  |
+                | 1  | {1, 1}                  |
+                | 2  | {-2, -2, 1, 1, 2, 2}    |
+                | -2 | {-2, -2, 1, 1, 2, 2}    |
+                | -2 | {-2, -2, 1, 1, 2, 2}    |
+                | 2  | {-2, -2, 1, 1, 2, 2}    |
+                | 3  | {-2, -2, 1, 1, 2, 2, 3} |
+                +----+-------------------------+
+                (1 row)""", false);
     }
 }

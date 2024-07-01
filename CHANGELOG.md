@@ -7,6 +7,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- [SQL] Added `MATERIALIZED` views
+  ([#1959](https://github.com/feldera/feldera/pull/1959))
+
+## [0.19.0] - 2024-06-25
+
+- [SQL] Preliminary support for MAP-typed values
+  ([#1905](https://github.com/feldera/feldera/pull/1905))
+- [avro] Allow serializing non-nullable SQL columns into nullable Avro columns
+  ([#1892](https://github.com/feldera/feldera/pull/1892))
+- [SQL] Support for specifying connector properties in SQL
+  ([#1896](https://github.com/feldera/feldera/pull/1896))
+- [SQL] Support for ARRAY_AGG aggregation function.
+  ([#1862](https://github.com/feldera/feldera/pull/1862))
+- [SQL] Support for hopping windows using table functions
+  ([#1855](https://github.com/feldera/feldera/pull/1855))
+- API: Support skipping the serialization of schema ID in Avro format.
+  ([#1871](https://github.com/feldera/feldera/pull/1871))
+- API: Demos are supplied by specifying a local directory rather than URLs,
+  and the demos endpoint returns the demos directly.
+  ([#1890](https://github.com/feldera/feldera/pull/1890))
+- [Python] Support for `register_local_view` and rename`register_view`
+  to `register_output_view` ([#1884](https://github.com/feldera/feldera/pull/1884))
+
+## [0.18.0] - 2024-06-11
+
+- [SQL] CREATE LOCAL VIEW statement to declare views which are not outputs.
+  ([#1851](https://github.com/feldera/feldera/pull/1851))
+- [SQL] CREATE LOCAL VIEW statement to declare views which are not outputs.
+  ([#1862](https://github.com/feldera/feldera/pull/1862))
+
+### Added
+
+- Documentation: added the
+  [fraud detection use case](https://feldera.com/docs/use_cases/fraud_detection)
+  to the docs section of the website.
+- API: storage class can be configured via pipeline resources
+  ([#1829](https://github.com/feldera/feldera/pull/1829))
+- [Python] Added support for Kafka connector via Python SDK
+  ([#1807](https://github.com/feldera/feldera/pull/1807))
+- [Python] Added support for HTTP GET connector via Python SDK
+- [Python] Add support for Avro format
+  ([#1836](https://github.com/feldera/feldera/pull/1836))
+- [Python] allow specifying pipeline resource configuration and compilation profile via SQLContext
+  ([#1835](https://github.com/feldera/feldera/pull/1835))
+- [Python] Add function to wait for the pipeline to become idle
+  ([#1841](https://github.com/feldera/feldera/pull/1841))
+- WebConsole: DeltaLake input (#1744) and output (#1584) conenctors
+- WebConsole: Add output buffer configuration UI (#1591)
+- WebConsole: Add health popup containing all system errors to the header (#1586)
+
+### Fixed
+
+- WebConsole: Fix crash when displaying anonymous output columns (#1757)
+
+## [0.17.0] - 2024-05-28
+
+### Added
+
+- Added backpressure mode to the `/egress` endpoint, which applies
+  backpressure on the pipeline if the HTTP client cannot keep up
+  with the output instead of dropping data.
+  ([#1780](https://github.com/feldera/feldera/pull/1780))
+- `/heap_profile` endpoint that generates the heap profile
+  of a pipeline in the pprof format.
+  ([#1767](https://github.com/feldera/feldera/pull/1767))
+- Python SDK for Feldera
+  ([#1745](https://github.com/feldera/feldera/pull/1745))
+
+
+## [0.16.0] - 2024-05-15
+
+### Added
+
+- [adapters] Delta Lake input adapter.
+  ([#1743](https://github.com/feldera/feldera/pull/1743))
+- [SQL] Support for user-defined functions implemented in SQL
+  ([#1714](https://github.com/feldera/feldera/pull/1714))
+- [Kafka] Allow specifying Kafka headers as part of output Kafka connector
+  config
+  ([#1718](https://github.com/feldera/feldera/pull/1718))
+- [SQL] Support for `LEAD`/`LAG` window aggregates
+  ([#1706](https://github.com/feldera/feldera/pull/1706))
+- [SQL] Support for `WATERMARK` table column annotations
+  ([#1694](https://github.com/feldera/feldera/pull/1694))
+- Added a new config flag `tcp_metrics_exporter` which allows to inspect
+  the pipeline metrics for debugging purposes with the `metrics-observer`
+  CLI.
+  ([#1710](https://github.com/feldera/feldera/pull/1710))
+
+### Changed
+
+- [Docs] Re-organize documentation sections
+  ([#1734](https://github.com/feldera/feldera/pull/1734))
+- [Docs] Expand connectors documentation
+  ([#1746](https://github.com/feldera/feldera/pull/1746))
+- [pipeline-manager] Program compilation profile is optional and is no
+  longer treated as a hint. Compiler compilation profile is now a default.
+  ([#1777](https://github.com/feldera/feldera/pull/1777))
+
+## [0.15.0] - 2024-04-30
+
+### Added
+
+- Initial support for Avro as an output format
+  ([#1673](https://github.com/feldera/feldera/pull/1673))
+- Ability to enable persistent storage for a pipeline through API/UI.
+  ([#1692](https://github.com/feldera/feldera/pull/1692))
+
+### Changed
+
+- Fixed a bug where sometimes the wrong profile for compilation
+  is chosen by the manager.
+  ([#1696](https://github.com/feldera/feldera/pull/1696))
+
+## [0.14.0] - 2024-04-17
+
+### Added
+
+- [SQL] `LATENESS` column attribute for tables and views
+  ([#1656](https://github.com/feldera/feldera/pull/1656))
+- [Docker] make the pipeline-manager container self-contained
+  ([#1683](https://github.com/feldera/feldera/pull/1683))
+
+### Added
+
+- [SQL] `ARG_MIN`, `ARG_MAX` aggregation functions
+  ([#1619](https://github.com/feldera/feldera/pull/1619))
+- SQL: Support for `ARRAYS_OVERLAP` function ([#1570](https://github.com/feldera/feldera/pull/1570))
+- Connectors: Initial Delta Table output connector support
+  ([#1639](https://github.com/feldera/feldera/pull/1639))
+- Added a `dev` profile to the pipeline manager to compile binaries with source information.
+  ([#1707](https://github.com/feldera/feldera/pull/1707))
+
+### Changed
+
+- [SQL]: `ARRAY_CONTAINS`, `ARRAY_POSITION`, `ARRAY_REMOVE` functions
+  for arguments of different types ([#1636](https://github.com/feldera/feldera/pull/1636))
+
+## [0.13.0] - 2024-04-02
+
+### Added
+
+- [SQL] Support for user-defined structure types
+  ([#1567](https://github.com/feldera/feldera/pull/1567))
+
+## [0.13.0] - 2024-04-02
+
 ### Added
 
 - Output buffering mechanism to consolidate multiple output
@@ -16,6 +163,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optimized modes, which tradeoff compilation speed for runtime speed
   ([#1524](https://github.com/feldera/feldera/pull/1524))
 - WebConsole: Support NULL values on Data Inspection and Insertion page (#1392)
+- pipeline-manager: Kafka input and output connector transport can refer
+  to a service using the `kafka_service` field. The service is used to provide
+  defaults for the Kafka options.
+  ([#1582](https://github.com/feldera/feldera/pull/1582))
 
 ### Changed
 
@@ -26,6 +177,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - WebConsole: State shows InQueue when program is empty (#1443)
+- WebConsole: Fix behavior of numeric inputs in Firefox
 
 ## [0.12.0] - 2024-03-19
 
@@ -276,6 +428,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#996](https://github.com/feldera/feldera/pull/996))
 - pipeline-manager now exposes a scrape endpoint for metrics, starting with the compiler service
   ([#1031](https://github.com/feldera/feldera/pull/1031))
+- WebConsole: Add a dialog to configure pipeline's runtime resources
+  ([#939](https://github.com/feldera/feldera/issues/939))
 
 ## [0.3.2] - 2023-11-10
 

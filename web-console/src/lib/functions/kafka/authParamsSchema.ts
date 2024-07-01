@@ -1,4 +1,4 @@
-import { fromKafkaConfig, librdkafkaAuthOptions } from '$lib/functions/kafka/librdkafkaOptions'
+import { fromLibrdkafkaConfig, librdkafkaAuthOptions } from '$lib/functions/kafka/librdkafkaOptions'
 import * as va from 'valibot'
 
 const sslSchema = va.object({
@@ -43,7 +43,7 @@ const saslPlaintextSchema = va.union([saslPassSchema, saslOauthSchema, saslGener
 
 export const authParamsSchema = va.union([
   va.object({
-    security_protocol: va.optional(va.literal('PLAINTEXT'), 'PLAINTEXT')
+    security_protocol: va.literal('PLAINTEXT')
   }),
   va.merge([
     va.object({
@@ -65,7 +65,7 @@ export const authParamsSchema = va.union([
     saslPlaintextSchema
   ]),
   va.object({
-    security_protocol: va.string()
+    security_protocol: va.optional(va.string())
   })
 ])
 
@@ -76,8 +76,7 @@ export type KafkaAuthSchema = va.Input<typeof authParamsSchema>
 export const defaultLibrdkafkaAuthOptions = {
   security_protocol: 'PLAINTEXT',
   enable_ssl_certificate_verification: true,
-  sasl_mechanism: 'PLAIN',
-  sasl_oauthbearer_method: 'default'
+  sasl_mechanism: 'PLAIN'
 } as KafkaAuthSchema
 
 export const parseAuthParams = (config: Record<string, string>) => {
@@ -86,6 +85,6 @@ export const parseAuthParams = (config: Record<string, string>) => {
   }
   return {
     ...defaultLibrdkafkaAuthOptions,
-    ...va.parse(authParamsSchema, fromKafkaConfig(config))
+    ...va.parse(authParamsSchema, fromLibrdkafkaConfig(config))
   }
 }

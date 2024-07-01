@@ -30,19 +30,25 @@
 //! by the circuit, but the counter shows that 10 records are still
 //! pending.
 
-use super::{EndpointId, InputEndpointConfig, OutputEndpointConfig, RuntimeConfig};
+use super::{EndpointId, InputEndpointConfig, OutputEndpointConfig};
 use crate::{
     transport::{AtomicStep, Step},
     PipelineState,
 };
 use anyhow::Error as AnyError;
 use crossbeam::sync::{ShardedLock, ShardedLockReadGuard, Unparker};
-use log::error;
+use metrics::{KeyName, SharedString as MetricString, Unit as MetricUnit};
+use metrics_util::{
+    debugging::{DebugValue, Snapshot},
+    CompositeKey,
+};
 use num_traits::FromPrimitive;
+use ordered_float::OrderedFloat;
 use pipeline_types::config::PipelineConfig;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use psutil::process::{Process, ProcessError};
-use serde::{Serialize, Serializer};
+use rand::{seq::index::sample, thread_rng};
+use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
     cmp::min,
     collections::BTreeMap,
@@ -51,6 +57,7 @@ use std::{
         Mutex,
     },
 };
+use tracing::error;
 
 #[derive(Default, Serialize)]
 pub struct GlobalControllerMetrics {
@@ -199,6 +206,182 @@ pub struct ControllerStatus {
     /// Output endpoint configs and metrics.
     #[serde(serialize_with = "serialize_outputs")]
     outputs: OutputsStatus,
+
+    /// Metrics.
+    pub metrics: Mutex<Vec<ControllerMetric>>,
+}
+
+/// Controller metrics.
+pub struct ControllerMetric {
+    /// Metric name.
+    key: KeyName,
+
+    /// Optional key-value pairs that provide additional metadata about this
+    /// metric.
+    labels: Vec<(MetricString, MetricString)>,
+
+    /// Unit of measure for this metric, if any.
+    unit: Option<MetricUnit>,
+
+    /// Optional natural language description of the metric.
+    description: Option<MetricString>,
+
+    /// The metric's value.
+    value: MetricValue,
+}
+
+impl
+    From<(
+        CompositeKey,
+        Option<MetricUnit>,
+        Option<MetricString>,
+        DebugValue,
+    )> for ControllerMetric
+{
+    fn from(
+        (composite_key, unit, description, value): (
+            CompositeKey,
+            Option<MetricUnit>,
+            Option<MetricString>,
+            DebugValue,
+        ),
+    ) -> Self {
+        let (_kind, key) = composite_key.into_parts();
+        let (name, labels) = key.into_parts();
+        Self {
+            key: name,
+            labels: labels.into_iter().map(|label| label.into_parts()).collect(),
+            unit,
+            description,
+            value: value.into(),
+        }
+    }
+}
+
+/// A metric's value.
+#[derive(Serialize)]
+pub enum MetricValue {
+    /// Counter.
+    ///
+    /// A counter counts some kind of event. It only goes up.
+    Counter(u64),
+    /// Gauge.
+    ///
+    /// A gauge reports the most recent value of some measurement. It may
+    /// increase and decrease over time.
+    Gauge(f64),
+    /// Histogram.
+    ///
+    /// A histogram reports a sequence of measured values. Each value of the
+    /// histogram is reported only once, so subsequent reads of the metric will
+    /// not include previously seen values, and if the metric is read twice in
+    /// quick succession the second read is likely to report an empty histogram.
+    ///
+    /// If the histogram is empty, then no values have been reported since the
+    /// last time it was read.
+    Histogram(Option<HistogramValue>),
+}
+
+#[derive(Serialize)]
+pub struct HistogramValue {
+    /// Number of values in the histogram.
+    count: usize,
+
+    /// A sample of the values in the histogram, paired with their indexes in
+    /// `0..count`, ordered by index.
+    sample: Vec<(usize, f64)>,
+
+    /// The smallest value in the histogram (which might not have been sampled).
+    minimum: f64,
+
+    /// The largest value in the histogram (which might not have been sampled).
+    maximum: f64,
+
+    /// The mean of the values in the histogram.
+    mean: f64,
+}
+
+/// The maximum number of samples provided in [`HistogramValue::sample`].
+pub const HISTOGRAM_SAMPLE_SIZE: usize = 100;
+
+impl From<DebugValue> for MetricValue {
+    fn from(source: DebugValue) -> Self {
+        match source {
+            DebugValue::Counter(count) => Self::Counter(count),
+            DebugValue::Gauge(gauge) => Self::Gauge(gauge.0),
+            DebugValue::Histogram(mut values) => Self::Histogram({
+                values.retain(|value| !value.is_nan());
+                if !values.is_empty() {
+                    Some(HistogramValue {
+                        count: values.len(),
+                        sample: {
+                            let mut indexes = sample(
+                                &mut thread_rng(),
+                                values.len(),
+                                min(HISTOGRAM_SAMPLE_SIZE, values.len()),
+                            )
+                            .into_vec();
+                            indexes.sort();
+                            indexes
+                                .into_iter()
+                                .map(|index| (index, values[index].0))
+                                .collect()
+                        },
+                        minimum: values.iter().min().unwrap().0,
+                        maximum: values.iter().max().unwrap().0,
+                        mean: values.iter().sum::<OrderedFloat<f64>>().0 / (values.len() as f64),
+                    })
+                } else {
+                    None
+                }
+            }),
+        }
+    }
+}
+
+impl Serialize for ControllerMetric {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Count the nonempty fields because `serialize_struct` wants to know.
+        let nonempty_fields = 2
+            + !self.labels.is_empty() as usize
+            + self.unit.is_some() as usize
+            + self.description.is_some() as usize;
+        let mut ts = serializer.serialize_struct("ControllerMetric", nonempty_fields)?;
+
+        ts.serialize_field("key", self.key.as_str())?;
+
+        if !self.labels.is_empty() {
+            // serde knows how to serialize `std::borrow::Cow` but `serde`
+            // defines and uses its own `Cow` that it can't handle.
+            let labels: Vec<_> = self
+                .labels
+                .iter()
+                .map(|(k, v)| (k.as_ref(), v.as_ref()))
+                .collect();
+            ts.serialize_field("labels", &labels)?;
+        } else {
+            ts.skip_field("labels")?;
+        }
+
+        if let Some(unit) = self.unit {
+            ts.serialize_field("unit", unit.as_canonical_label())?;
+        } else {
+            ts.skip_field("unit")?;
+        }
+
+        if let Some(description) = &self.description {
+            ts.serialize_field("description", description.as_ref())?;
+        } else {
+            ts.skip_field("description")?;
+        }
+
+        ts.serialize_field("value", &self.value)?;
+
+        ts.end()
+    }
 }
 
 impl ControllerStatus {
@@ -208,6 +391,7 @@ impl ControllerStatus {
             global_metrics: GlobalControllerMetrics::new(),
             inputs: ShardedLock::new(BTreeMap::new()),
             outputs: ShardedLock::new(BTreeMap::new()),
+            metrics: Mutex::new(Vec::new()),
         }
     }
 
@@ -324,16 +508,16 @@ impl ControllerStatus {
     }
 
     /// True if the number of records buffered by the endpoint exceeds
-    /// its `max_buffered_records` config parameter.
+    /// its `max_queued_records` config parameter.
     pub fn input_endpoint_full(&self, endpoint_id: &EndpointId) -> bool {
         let buffered_records = self.num_input_endpoint_buffered_records(endpoint_id);
 
-        let max_buffered_records = match self.inputs.read().unwrap().get(endpoint_id) {
+        let max_queued_records = match self.inputs.read().unwrap().get(endpoint_id) {
             None => return false,
-            Some(endpoint) => endpoint.config.connector_config.max_buffered_records,
+            Some(endpoint) => endpoint.config.connector_config.max_queued_records,
         };
 
-        buffered_records >= max_buffered_records
+        buffered_records >= max_queued_records
     }
 
     /// Update counters after receiving a new input batch.
@@ -347,14 +531,13 @@ impl ControllerStatus {
     /// * `circuit_thread_unparker` - unparker used to wake up the circuit
     ///   thread if the total number of buffered records exceeds
     ///   `min_batch_size_records`.
-    /// * `backpressure_thread_unparker` - unparker used to wake up the the
+    /// * `backpressure_thread_unparker` - unparker used to wake up the
     ///   backpressure thread if the endpoint is full.
     pub fn input_batch(
         &self,
         endpoint_id: EndpointId,
         num_bytes: usize,
         num_records: usize,
-        global_config: &RuntimeConfig,
         circuit_thread_unparker: &Unparker,
         backpressure_thread_unparker: &Unparker,
     ) {
@@ -366,8 +549,8 @@ impl ControllerStatus {
         let old = self.global_metrics.input_batch(num_records);
 
         if old == 0
-            || (old <= global_config.min_batch_size_records
-                && old + num_records > global_config.min_batch_size_records)
+            || (old <= self.pipeline_config.global.min_batch_size_records
+                && old + num_records > self.pipeline_config.global.min_batch_size_records)
         {
             circuit_thread_unparker.unpark();
         }
@@ -375,15 +558,15 @@ impl ControllerStatus {
         let inputs = self.inputs.read().unwrap();
 
         // Update endpoint counters; unpark backpressure thread if endpoint's
-        // `max_buffered_records` exceeded.
+        // `max_queued_records` exceeded.
         //
         // There is a potential race condition if the endpoint is currently being
         // removed. In this case, it's safe to ignore this operation.
         if let Some(endpoint_stats) = inputs.get(&endpoint_id) {
             let old = endpoint_stats.add_buffered(num_bytes, num_records);
 
-            if old < endpoint_stats.config.connector_config.max_buffered_records
-                && old + num_records >= endpoint_stats.config.connector_config.max_buffered_records
+            if old < endpoint_stats.config.connector_config.max_queued_records
+                && old + num_records >= endpoint_stats.config.connector_config.max_queued_records
             {
                 backpressure_thread_unparker.unpark();
             }
@@ -483,8 +666,8 @@ impl ControllerStatus {
         if let Some(endpoint_stats) = self.output_status().get(&endpoint_id) {
             let old = endpoint_stats.buffer_batch(num_records);
             if old - (num_records as u64)
-                <= endpoint_stats.config.connector_config.max_buffered_records
-                && old >= endpoint_stats.config.connector_config.max_buffered_records
+                <= endpoint_stats.config.connector_config.max_queued_records
+                && old >= endpoint_stats.config.connector_config.max_queued_records
             {
                 circuit_thread_unparker.unpark();
             }
@@ -501,8 +684,8 @@ impl ControllerStatus {
         if let Some(endpoint_stats) = self.output_status().get(&endpoint_id) {
             let old = endpoint_stats.output_batch(total_processed_records, num_records);
             if old - (num_records as u64)
-                <= endpoint_stats.config.connector_config.max_buffered_records
-                && old >= endpoint_stats.config.connector_config.max_buffered_records
+                <= endpoint_stats.config.connector_config.max_queued_records
+                && old >= endpoint_stats.config.connector_config.max_queued_records
             {
                 circuit_thread_unparker.unpark();
             }
@@ -527,7 +710,7 @@ impl ControllerStatus {
                 .metrics
                 .queued_records
                 .load(Ordering::Acquire);
-            num_buffered_records >= endpoint_stats.config.connector_config.max_buffered_records
+            num_buffered_records >= endpoint_stats.config.connector_config.max_queued_records
         })
     }
 
@@ -588,10 +771,17 @@ impl ControllerStatus {
         Ok(Process::current()?.memory_info()?.rss())
     }
 
-    pub fn update(&self) {
+    pub fn update(&self, metrics: Snapshot) {
         self.global_metrics
             .pipeline_complete
             .store(self.pipeline_complete(), Ordering::Release);
+
+        let metrics = metrics
+            .into_vec()
+            .into_iter()
+            .map(|element| element.into())
+            .collect();
+        *self.metrics.lock().unwrap() = metrics;
 
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {

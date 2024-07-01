@@ -7,6 +7,7 @@ use crate::{
     trace::Spine,
 };
 
+use crate::circuit::checkpointer::Checkpoint;
 use impl_trait_for_tuples::impl_for_tuples;
 use size_of::SizeOf;
 use std::result::Result;
@@ -54,7 +55,7 @@ impl<C, B> RecursiveStreams<C> for Stream<C, B>
 where
     C: Circuit,
     C::Parent: Circuit,
-    B: IndexedZSet + Send,
+    B: Checkpoint + IndexedZSet + Send + Sync,
     Spine<B>: SizeOf,
 {
     type Feedback = DelayedFeedback<C, B>;
@@ -176,7 +177,8 @@ where
 #[cfg(test)]
 mod test {
     use crate::{
-        operator::Generator, typed_batch::OrdZSet, utils::Tup2, zset, Circuit, RootCircuit, Stream,
+        operator::Generator, typed_batch::OrdZSet, utils::Tup2, zset, Circuit, FallbackZSet,
+        RootCircuit, Stream,
     };
     use std::vec;
 
@@ -280,7 +282,7 @@ mod test {
             let edges = circuit
                     .add_source(Generator::new(move || edges.next().unwrap()));
 
-            let (paths, reverse_paths):  (Stream<_, OrdZSet<Tup2<u64, u64>>>, Stream<_, OrdZSet<Tup2<u64, u64>>>) =
+            let (paths, reverse_paths):  (Stream<_, FallbackZSet<Tup2<u64, u64>>>, Stream<_, FallbackZSet<Tup2<u64, u64>>>) =
                 circuit.recursive(|child, (paths, reverse_paths): (Edges<_>, Edges<_>)| {
                 let edges = edges.delta0(child);
 

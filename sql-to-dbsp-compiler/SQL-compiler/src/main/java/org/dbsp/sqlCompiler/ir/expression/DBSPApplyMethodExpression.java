@@ -23,8 +23,9 @@
 
 package org.dbsp.sqlCompiler.ir.expression;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.IDBSPNode;
 import org.dbsp.sqlCompiler.ir.path.DBSPPath;
@@ -32,10 +33,8 @@ import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.util.IIndentStream;
 import org.dbsp.util.Linq;
 
-/**
- * Function application expression.
- */
-public class DBSPApplyMethodExpression extends DBSPApplyBaseExpression {
+/** Method application expression. */
+public final class DBSPApplyMethodExpression extends DBSPApplyBaseExpression {
     public final DBSPExpression self;
 
     public DBSPApplyMethodExpression(CalciteObject node,
@@ -85,7 +84,10 @@ public class DBSPApplyMethodExpression extends DBSPApplyBaseExpression {
 
     @Override
     public IIndentStream toString(IIndentStream builder) {
-        return builder.append(this.self)
+        return builder
+                .append("(")
+                .append(this.self)
+                .append(")")
                 .append(".")
                 .append(this.function)
                 .append("(")
@@ -97,5 +99,19 @@ public class DBSPApplyMethodExpression extends DBSPApplyBaseExpression {
     public DBSPExpression deepCopy() {
         return new DBSPApplyMethodExpression(this.function.deepCopy(), this.getType(),
                 this.self.deepCopy(), Linq.map(this.arguments, DBSPExpression::deepCopy, DBSPExpression.class));
+    }
+
+    public DBSPApplyMethodExpression replaceArguments(DBSPExpression self, DBSPExpression... arguments) {
+        return new DBSPApplyMethodExpression(this.function, this.type, self, arguments);
+    }
+
+    @Override
+    public boolean equivalent(EquivalenceContext context, DBSPExpression other) {
+        DBSPApplyMethodExpression otherExpression = other.as(DBSPApplyMethodExpression.class);
+        if (otherExpression == null)
+            return false;
+        return context.equivalent(this.self, otherExpression.self) &&
+                context.equivalent(this.function, otherExpression.function) &&
+                context.equivalent(this.arguments, otherExpression.arguments);
     }
 }

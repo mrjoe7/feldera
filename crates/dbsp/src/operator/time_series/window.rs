@@ -69,9 +69,9 @@ where
         &self,
         bounds: &Stream<C, (TypedBox<B::Key, B::DynK>, TypedBox<B::Key, B::DynK>)>,
     ) -> Stream<C, B> {
-        let factories = BatchReaderFactories::new::<B::Key, B::Val, ZWeight>();
+        let input_factories = BatchReaderFactories::new::<B::Key, B::Val, ZWeight>();
 
         let bounds = unsafe { bounds.transmute_payload::<(Box<B::DynK>, Box<B::DynK>)>() };
-        self.inner().dyn_window(&factories, &bounds).typed()
+        self.inner().dyn_window(&input_factories, &bounds).typed()
     }
 }

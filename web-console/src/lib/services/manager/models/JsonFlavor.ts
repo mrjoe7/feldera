@@ -1,4 +1,4 @@
-/* generated using openapi-typescript-codegen -- do no edit */
+/* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
@@ -9,5 +9,6 @@ export enum JsonFlavor {
   DEFAULT = 'default',
   DEBEZIUM_MYSQL = 'debezium_mysql',
   SNOWFLAKE = 'snowflake',
-  KAFKA_CONNECT_JSON_CONVERTER = 'kafka_connect_json_converter'
+  KAFKA_CONNECT_JSON_CONVERTER = 'kafka_connect_json_converter',
+  PANDAS = 'pandas'
 }

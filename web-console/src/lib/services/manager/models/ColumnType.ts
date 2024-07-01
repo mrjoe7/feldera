@@ -1,7 +1,8 @@
-/* generated using openapi-typescript-codegen -- do no edit */
+/* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { Field } from './Field'
 import type { SqlType } from './SqlType'
 /**
  * A SQL column type description.
@@ -10,6 +11,31 @@ import type { SqlType } from './SqlType'
  */
 export type ColumnType = {
   component?: ColumnType | null
+  /**
+   * The fields of the type (if available).
+   *
+   * For example this would specify the fields of a `CREATE TYPE` construct.
+   *
+   * ```sql
+   * CREATE TYPE person_typ AS (
+   * firstname       VARCHAR(30),
+   * lastname        VARCHAR(30),
+   * address         ADDRESS_TYP
+   * );
+   * ```
+   *
+   * Would lead to the following `fields` value:
+   *
+   * ```sql
+   * [
+   * ColumnType { name: "firstname, ... },
+   * ColumnType { name: "lastname", ... },
+   * ColumnType { name: "address", fields: [ ... ] }
+   * ]
+   * ```
+   */
+  fields?: Array<Field> | null
+  key?: ColumnType | null
   /**
    * Does the type accept NULL values?
    */
@@ -33,4 +59,5 @@ export type ColumnType = {
    */
   scale?: number | null
   type: SqlType
+  value?: ColumnType | null
 }

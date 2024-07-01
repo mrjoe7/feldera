@@ -59,27 +59,19 @@ public class Passes implements IWritesLogs, CircuitTransform {
 
     @Override
     public DBSPCircuit apply(DBSPCircuit circuit) {
-        boolean details = this.getDebugLevel() >= 4;
+        int details = this.getDebugLevel();
         if (this.getDebugLevel() >= 3) {
-            String name = dumped++ + "before.png";
-            Logger.INSTANCE.belowLevel(this, 3)
-                    .append("Writing circuit to ")
-                    .append(name)
-                    .newline();
+            String name = String.format("%02d-", dumped++) + "before.png";
             ToDotVisitor.toDot(this.errorReporter, name, details, "png", circuit);
         }
         for (CircuitTransform pass: this.passes) {
-            Logger.INSTANCE.belowLevel(this, 1)
+            Logger.INSTANCE.belowLevel("Passes", 1)
                     .append("Executing ")
                     .append(pass.toString())
                     .newline();
             circuit = pass.apply(circuit);
             if (this.getDebugLevel() >= 3) {
-                String name = dumped++ + pass.toString().replace(" ", "_") + ".png";
-                Logger.INSTANCE.belowLevel(this, 3)
-                        .append("Writing circuit to ")
-                        .append(name)
-                        .newline();
+                String name = String.format("%02d-", dumped++) + pass.toString().replace(" ", "_") + ".png";
                 ToDotVisitor.toDot(this.errorReporter, name, details, "png", circuit);
             }
         }
@@ -88,6 +80,14 @@ public class Passes implements IWritesLogs, CircuitTransform {
 
     @Override
     public String toString() {
-        return "Passes" + this.passes;
+        StringBuilder names = new StringBuilder();
+        boolean first = true;
+        for (CircuitTransform pass: this.passes) {
+            if (!first)
+                names.append("-");
+            first = false;
+            names.append(pass.toString());
+        }
+        return names.toString();
     }
 }

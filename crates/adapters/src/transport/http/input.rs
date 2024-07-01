@@ -1,14 +1,14 @@
+use crate::transport::InputEndpoint;
 use crate::{
     server::{PipelineError, MAX_REPORTED_PARSE_ERRORS},
     transport::{InputReader, Step},
-    ControllerError, InputConsumer, InputEndpoint, ParseError, PipelineState, TransportConfig,
+    ControllerError, InputConsumer, ParseError, PipelineState, TransportConfig,
+    TransportInputEndpoint,
 };
-use actix::Message;
 use actix_web::{web::Payload, HttpResponse};
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
 use circular_queue::CircularQueue;
 use futures_util::StreamExt;
-use log::debug;
 use num_traits::FromPrimitive;
 use serde::Deserialize;
 use std::{
@@ -19,6 +19,7 @@ use std::{
     time::Duration,
 };
 use tokio::{sync::watch, time::timeout};
+use tracing::debug;
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) enum HttpIngressMode {
@@ -79,10 +80,6 @@ impl HttpInputEndpointInner {
         }
     }
 }
-
-#[derive(Message)]
-#[rtype(result = "()")]
-struct EndpointStateNotification;
 
 /// Input endpoint that streams input data via HTTP.
 #[derive(Clone)]
@@ -202,6 +199,12 @@ impl HttpInputEndpoint {
 }
 
 impl InputEndpoint for HttpInputEndpoint {
+    fn is_fault_tolerant(&self) -> bool {
+        false
+    }
+}
+
+impl TransportInputEndpoint for HttpInputEndpoint {
     fn open(
         &self,
         consumer: Box<dyn InputConsumer>,
@@ -209,10 +212,6 @@ impl InputEndpoint for HttpInputEndpoint {
     ) -> AnyResult<Box<dyn InputReader>> {
         *self.inner.consumer.lock().unwrap() = Some(consumer);
         Ok(Box::new(self.clone()))
-    }
-
-    fn is_fault_tolerant(&self) -> bool {
-        false
     }
 }
 

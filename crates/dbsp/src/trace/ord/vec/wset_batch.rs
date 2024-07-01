@@ -4,15 +4,16 @@ use crate::{
         DataTrait, DynPair, DynUnit, DynVec, DynWeightedPairs, Erase, Factory, LeanVec,
         WeightTrait, WeightTraitTyped, WithFactory,
     },
-    time::AntichainRef,
+    time::{Antichain, AntichainRef},
     trace::{
+        cursor::{HasTimeDiffCursor, SingletonTimeDiffCursor},
         layers::{
             Builder as _, Cursor as _, Leaf, LeafBuilder, LeafCursor, LeafFactories, MergeBuilder,
             Trie, TupleBuilder,
         },
         ord::merge_batcher::MergeBatcher,
         Batch, BatchFactories, BatchReader, BatchReaderFactories, Builder, Cursor, Deserializer,
-        Filter, Merger, Serializer, WeightedItem,
+        Filter, Merger, Serializer, TimedBuilder, WeightedItem,
     },
     utils::Tup2,
     DBData, DBWeight, NumEntries,
@@ -23,7 +24,7 @@ use size_of::SizeOf;
 use std::{
     cmp::max,
     fmt::{self, Debug, Display},
-    ops::{Add, AddAssign, Neg},
+    ops::Neg,
 };
 
 pub struct VecWSetFactories<K: DataTrait + ?Sized, R: WeightTrait + ?Sized> {
@@ -220,13 +221,13 @@ impl<K: DataTrait + ?Sized, R: WeightTrait + ?Sized> Display for VecWSet<K, R> {
     }
 }
 
-/*impl<K, R, KR> From<Leaf<K, R, KR>> for OrdZSet<K, R, KR> {
+/*impl<K, R, KR> From<Leaf<K, R, KR>> for VecZSet<K, R, KR> {
     fn from(layer: Leaf<K, R, KR>) -> Self {
         Self { layer }
     }
 }
 
-impl<K, R, KR> From<Leaf<K, R, KR>> for Rc<OrdZSet<K, R, KR>> {
+impl<K, R, KR> From<Leaf<K, R, KR>> for Rc<VecZSet<K, R, KR>> {
     fn from(layer: Leaf<K, R, KR>) -> Self {
         Rc::new(From::from(layer))
     }
@@ -274,26 +275,6 @@ where
     }
 }
 
-// TODO: by-value merge
-impl<K: DataTrait + ?Sized, R: WeightTrait + ?Sized> Add<Self> for VecWSet<K, R> {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            layer: self.layer.add(rhs.layer),
-            factories: self.factories,
-            // weighted_item_factory: self.weighted_item_factory,
-            // batch_item_factory: self.batch_item_factory,
-        }
-    }
-}
-
-impl<K: DataTrait + ?Sized, R: WeightTrait + ?Sized> AddAssign<Self> for VecWSet<K, R> {
-    fn add_assign(&mut self, rhs: Self) {
-        self.layer.add_assign(rhs.layer);
-    }
-}
-
 impl<K: DataTrait + ?Sized, R: WeightTrait + ?Sized> AddAssignByRef for VecWSet<K, R> {
     fn add_assign_by_ref(&mut self, rhs: &Self) {
         self.layer.add_assign_by_ref(&rhs.layer);
@@ -318,7 +299,7 @@ impl<K: DataTrait + ?Sized, R: WeightTrait + ?Sized> BatchReader for VecWSet<K, 
     type R = R;
     type Cursor<'s> = VecWSetCursor<'s, K, R>;
     type Factories = VecWSetFactories<K, R>;
-    // type Consumer = OrdZSetConsumer<K, R>;
+    // type Consumer = VecZSetConsumer<K, R>;
 
     #[inline]
     fn factories(&self) -> Self::Factories {
@@ -336,7 +317,7 @@ impl<K: DataTrait + ?Sized, R: WeightTrait + ?Sized> BatchReader for VecWSet<K, 
     /*
     #[inline]
     fn consumer(self) -> Self::Consumer {
-        OrdZSetConsumer {
+        VecZSetConsumer {
             consumer: ColumnLayerConsumer::from(self.layer),
         }
     }*/
@@ -466,7 +447,7 @@ where
 #[derive(Debug, SizeOf)]
 pub struct VecWSetCursor<'s, K: DataTrait + ?Sized, R: WeightTrait + ?Sized> {
     valid: bool,
-    cursor: LeafCursor<'s, K, R>,
+    pub(crate) cursor: LeafCursor<'s, K, R>,
 }
 
 impl<'s, K, R> Clone for VecWSetCursor<'s, K, R>
@@ -607,6 +588,20 @@ impl<'s, K: DataTrait + ?Sized, R: WeightTrait + ?Sized> Cursor<K, DynUnit, (), 
     }
 }
 
+impl<'s, K, R> HasTimeDiffCursor<K, DynUnit, (), R> for VecWSetCursor<'s, K, R>
+where
+    K: DataTrait + ?Sized,
+    R: WeightTrait + ?Sized,
+{
+    type TimeDiffCursor<'a> = SingletonTimeDiffCursor<'a, R>
+    where
+        Self: 'a;
+
+    fn time_diff_cursor(&self) -> Self::TimeDiffCursor<'_> {
+        SingletonTimeDiffCursor::new(self.val_valid().then(|| self.cursor.current_diff()))
+    }
+}
+
 /// A builder for creating layers from unsorted update tuples.
 #[derive(SizeOf)]
 pub struct VecWSetBuilder<K: DataTrait + ?Sized, R: WeightTrait + ?Sized> {
@@ -675,9 +670,23 @@ where
     }
 }
 
+impl<K, R> TimedBuilder<VecWSet<K, R>> for VecWSetBuilder<K, R>
+where
+    K: DataTrait + ?Sized,
+    R: WeightTrait + ?Sized,
+{
+    fn push_time(&mut self, key: &K, val: &DynUnit, _time: &(), weight: &R) {
+        self.push_refs(key, val, weight);
+    }
+
+    fn done_with_bounds(self, _lower: Antichain<()>, _upper: Antichain<()>) -> VecWSet<K, R> {
+        self.done()
+    }
+}
+
 /*
 #[derive(Debug, SizeOf)]
-pub struct OrdZSetConsumer<K, R>
+pub struct VecZSetConsumer<K, R>
 where
     K: 'static,
     R: 'static,
@@ -685,8 +694,8 @@ where
     consumer: ColumnLayerConsumer<K, R>,
 }
 
-impl<K, R> Consumer<K, (), R, ()> for OrdZSetConsumer<K, R> {
-    type ValueConsumer<'a> = OrdZSetValueConsumer<'a, K, R>
+impl<K, R> Consumer<K, (), R, ()> for VecZSetConsumer<K, R> {
+    type ValueConsumer<'a> = VecZSetValueConsumer<'a, K, R>
     where
         Self: 'a;
 
@@ -700,7 +709,7 @@ impl<K, R> Consumer<K, (), R, ()> for OrdZSetConsumer<K, R> {
 
     fn next_key(&mut self) -> (K, Self::ValueConsumer<'_>) {
         let (key, values) = self.consumer.next_key();
-        (key, OrdZSetValueConsumer { values })
+        (key, VecZSetValueConsumer { values })
     }
 
     fn seek_key(&mut self, key: &K) {
@@ -709,7 +718,7 @@ impl<K, R> Consumer<K, (), R, ()> for OrdZSetConsumer<K, R> {
 }
 
 #[derive(Debug)]
-pub struct OrdZSetValueConsumer<'a, K, R>
+pub struct VecZSetValueConsumer<'a, K, R>
 where
     K: 'static,
     R: 'static,
@@ -717,7 +726,7 @@ where
     values: ColumnLayerValues<'a, K, R>,
 }
 
-impl<'a, K, R> ValueConsumer<'a, (), R, ()> for OrdZSetValueConsumer<'a, K, R> {
+impl<'a, K, R> ValueConsumer<'a, (), R, ()> for VecZSetValueConsumer<'a, K, R> {
     fn value_valid(&self) -> bool {
         self.values.value_valid()
     }

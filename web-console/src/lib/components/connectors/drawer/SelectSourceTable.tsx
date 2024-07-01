@@ -7,7 +7,6 @@ import { connectorDescrToType } from '$lib/functions/connectors'
 import { ConnectorDescr } from '$lib/services/manager'
 import Link from 'next/link'
 import { Dispatch, useState } from 'react'
-import IconShow from '~icons/bx/show'
 
 import { Box, IconButton, Tooltip } from '@mui/material'
 import Button from '@mui/material/Button'
@@ -27,16 +26,14 @@ const SelectSourceTable = (props: {
 
   const columns: GridColDef[] = [
     {
-      flex: 0.05,
-      minWidth: 50,
-      field: 'connector_id',
-      headerName: 'ID'
+      field: 'connector_id'
     },
     {
       flex: 0.3,
       minWidth: 290,
       headerName: 'Name',
-      field: 'name'
+      field: 'name',
+      display: 'flex'
     },
     {
       width: 120,
@@ -57,7 +54,7 @@ const SelectSourceTable = (props: {
             </Button>
             <Tooltip title='Inspect' key='inspect'>
               <IconButton size='small' component={Link} href={'#view/connector/' + params.row.name}>
-                <IconShow fontSize={20} />
+                <i className={`bx bx-show`} style={{ fontSize: 24 }} />
               </IconButton>
             </Tooltip>
           </Box>

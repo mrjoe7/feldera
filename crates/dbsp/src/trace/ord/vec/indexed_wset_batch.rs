@@ -4,14 +4,15 @@ use crate::{
         DataTrait, DynPair, DynVec, DynWeightedPairs, Erase, Factory, LeanVec, WeightTrait,
         WeightTraitTyped, WithFactory,
     },
-    time::AntichainRef,
+    time::{Antichain, AntichainRef},
     trace::{
+        cursor::{HasTimeDiffCursor, SingletonTimeDiffCursor},
         layers::{
             Builder as _, Cursor as _, Layer, LayerBuilder, LayerCursor, LayerFactories, Leaf,
             LeafBuilder, LeafFactories, MergeBuilder, OrdOffset, Trie, TupleBuilder,
         },
         Batch, BatchFactories, BatchReader, BatchReaderFactories, Builder, Cursor, Deserializer,
-        Filter, Merger, Serializer, WeightedItem,
+        Filter, Merger, Serializer, TimedBuilder, WeightedItem,
     },
     utils::Tup2,
     DBData, DBWeight, NumEntries,
@@ -21,7 +22,7 @@ use rkyv::{Archive, Deserialize, Serialize};
 use size_of::SizeOf;
 use std::{
     fmt::{self, Debug, Display},
-    ops::{Add, AddAssign, Neg},
+    ops::Neg,
 };
 
 use crate::trace::ord::merge_batcher::MergeBatcher;
@@ -221,7 +222,7 @@ where
     }
 }
 
-/*impl<K, V, R, KV, KVR, O> Default for OrdIndexedWSet<K, V, R, KV, KVR, O>
+/*impl<K, V, R, KV, KVR, O> Default for VecIndexedWSet<K, V, R, KV, KVR, O>
 where
     O: OrdOffset,
 {
@@ -231,7 +232,7 @@ where
     }
 }*/
 
-/*impl<K, V, R, KV, KVR, O> From<Layers<K, V, R, O>> for OrdIndexedWSet<K, V, R, KV, KVR, O>
+/*impl<K, V, R, KV, KVR, O> From<Layers<K, V, R, O>> for VecIndexedWSet<K, V, R, KV, KVR, O>
 where
     O: OrdOffset,
 {
@@ -241,7 +242,7 @@ where
     }
 }
 
-impl<K, V, R, O> From<Layers<K, V, R, O>> for Rc<OrdIndexedWSet<K, V, R, O>>
+impl<K, V, R, O> From<Layers<K, V, R, O>> for Rc<VecIndexedWSet<K, V, R, O>>
 where
     K: Ord,
     V: Ord,
@@ -307,38 +308,6 @@ where
             layer: self.layer.neg(),
             factories: self.factories.clone(),
         }
-    }
-}
-
-// TODO: by-value merge
-impl<K, V, R, O> Add<Self> for VecIndexedWSet<K, V, R, O>
-where
-    K: DataTrait + ?Sized,
-    V: DataTrait + ?Sized,
-    R: WeightTrait + ?Sized,
-    O: OrdOffset,
-{
-    type Output = Self;
-    #[inline]
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            layer: self.layer.add(rhs.layer),
-            factories: self.factories.clone(),
-        }
-    }
-}
-
-impl<K, V, R, O> AddAssign<Self> for VecIndexedWSet<K, V, R, O>
-where
-    K: DataTrait + ?Sized,
-    V: DataTrait + ?Sized,
-    R: WeightTrait + ?Sized,
-    O: OrdOffset,
-{
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        self.layer.add_assign(rhs.layer);
     }
 }
 
@@ -441,13 +410,11 @@ where
         V: 's,
         O: 's;
     type Factories = VecIndexedWSetFactories<K, V, R>;
-    // type Consumer = OrdIndexedWSetConsumer<K, V, R, O>;
+    // type Consumer = VecIndexedWSetConsumer<K, V, R, O>;
 
     #[inline]
     fn cursor(&self) -> Self::Cursor<'_> {
-        VecIndexedWSetCursor {
-            cursor: self.layer.cursor(),
-        }
+        VecIndexedWSetCursor::new(self)
     }
 
     fn factories(&self) -> Self::Factories {
@@ -456,7 +423,7 @@ where
 
     /*#[inline]
     fn consumer(self) -> Self::Consumer {
-        OrdIndexedWSetConsumer {
+        VecIndexedWSetConsumer {
             consumer: OrderedLayerConsumer::from(self.layer),
         }
     }*/
@@ -503,7 +470,7 @@ where
 {
     type Batcher = MergeBatcher<Self>;
     type Builder = VecIndexedWSetBuilder<K, V, R, O>;
-    type Merger = OrdIndexedWSetMerger<K, V, R, O>;
+    type Merger = VecIndexedWSetMerger<K, V, R, O>;
 
     /*fn from_keys(time: Self::Time, keys: Vec<(Self::Key, Self::R)>) -> Self
     where
@@ -518,7 +485,7 @@ where
     }*/
 
     fn begin_merge(&self, other: &Self) -> Self::Merger {
-        OrdIndexedWSetMerger::new_merger(self, other)
+        VecIndexedWSetMerger::new_merger(self, other)
     }
 
     fn recede_to(&mut self, _frontier: &()) {}
@@ -526,7 +493,7 @@ where
 
 /// State for an in-progress merge.
 #[derive(SizeOf)]
-pub struct OrdIndexedWSetMerger<K, V, R, O>
+pub struct VecIndexedWSetMerger<K, V, R, O = usize>
 where
     K: DataTrait + ?Sized,
     V: DataTrait + ?Sized,
@@ -546,7 +513,7 @@ where
 }
 
 impl<K, V, R, O> Merger<K, V, (), R, VecIndexedWSet<K, V, R, O>>
-    for OrdIndexedWSetMerger<K, V, R, O>
+    for VecIndexedWSetMerger<K, V, R, O>
 where
     K: DataTrait + ?Sized,
     V: DataTrait + ?Sized,
@@ -629,16 +596,37 @@ where
 
 /// A cursor for navigating a single layer.
 #[derive(Debug, SizeOf)]
-pub struct VecIndexedWSetCursor<'s, K, V, R, O>
+pub struct VecIndexedWSetCursor<'s, K, V, R, O = usize>
 where
     K: DataTrait + ?Sized,
     V: DataTrait + ?Sized,
     R: WeightTrait + ?Sized,
     O: OrdOffset,
 {
-    cursor: LayerCursor<'s, K, Leaf<V, R>, O>,
+    pub(crate) cursor: LayerCursor<'s, K, Leaf<V, R>, O>,
 }
 
+impl<'s, K, V, R, O> VecIndexedWSetCursor<'s, K, V, R, O>
+where
+    K: DataTrait + ?Sized,
+    V: DataTrait + ?Sized,
+    R: WeightTrait + ?Sized,
+    O: OrdOffset,
+{
+    pub fn new(zset: &'s VecIndexedWSet<K, V, R, O>) -> Self {
+        Self {
+            cursor: zset.layer.cursor(),
+        }
+    }
+
+    pub fn new_from(zset: &'s VecIndexedWSet<K, V, R, O>, lower_bound: usize) -> Self {
+        Self {
+            cursor: zset
+                .layer
+                .cursor_from(lower_bound, zset.layer.lower_bound() + zset.layer.keys()),
+        }
+    }
+}
 impl<'s, K, V, R, O> Clone for VecIndexedWSetCursor<'s, K, V, R, O>
 where
     K: DataTrait + ?Sized,
@@ -775,11 +763,26 @@ where
     }
 }
 
+impl<'s, K, V, R> HasTimeDiffCursor<K, V, (), R> for VecIndexedWSetCursor<'s, K, V, R>
+where
+    K: DataTrait + ?Sized,
+    V: DataTrait + ?Sized,
+    R: WeightTrait + ?Sized,
+{
+    type TimeDiffCursor<'a> = SingletonTimeDiffCursor<'a, R>
+    where
+        Self: 'a;
+
+    fn time_diff_cursor(&self) -> Self::TimeDiffCursor<'_> {
+        SingletonTimeDiffCursor::new(self.val_valid().then(|| self.cursor.child.current_diff()))
+    }
+}
+
 type IndexBuilder<K, V, R, O> = LayerBuilder<K, LeafBuilder<V, R>, O>;
 
 /// A builder for creating layers from unsorted update tuples.
 #[derive(SizeOf)]
-pub struct VecIndexedWSetBuilder<K, V, R, O>
+pub struct VecIndexedWSetBuilder<K, V, R, O = usize>
 where
     K: DataTrait + ?Sized,
     V: DataTrait + ?Sized,
@@ -852,7 +855,26 @@ where
     }
 }
 
-/*pub struct OrdIndexedWSetConsumer<K, V, R, O>
+impl<K, V, R> TimedBuilder<VecIndexedWSet<K, V, R>> for VecIndexedWSetBuilder<K, V, R>
+where
+    K: DataTrait + ?Sized,
+    V: DataTrait + ?Sized,
+    R: WeightTrait + ?Sized,
+{
+    fn push_time(&mut self, key: &K, val: &V, _time: &(), weight: &R) {
+        self.push_refs(key, val, weight);
+    }
+
+    fn done_with_bounds(
+        self,
+        _lower: Antichain<()>,
+        _upper: Antichain<()>,
+    ) -> VecIndexedWSet<K, V, R> {
+        self.done()
+    }
+}
+
+/*pub struct VecIndexedWSetConsumer<K, V, R, O>
 where
     K: 'static,
     V: 'static,
@@ -862,11 +884,11 @@ where
     consumer: OrderedLayerConsumer<K, V, R, O>,
 }
 
-impl<K, V, R, O> Consumer<K, V, R, ()> for OrdIndexedWSetConsumer<K, V, R, O>
+impl<K, V, R, O> Consumer<K, V, R, ()> for VecIndexedWSetConsumer<K, V, R, O>
 where
     O: OrdOffset,
 {
-    type ValueConsumer<'a> = OrdIndexedWSetValueConsumer<'a, K, V,  R, O>
+    type ValueConsumer<'a> = VecIndexedWSetValueConsumer<'a, K, V,  R, O>
     where
         Self: 'a;
 
@@ -880,7 +902,7 @@ where
 
     fn next_key(&mut self) -> (K, Self::ValueConsumer<'_>) {
         let (key, consumer) = self.consumer.next_key();
-        (key, OrdIndexedWSetValueConsumer::new(consumer))
+        (key, VecIndexedWSetValueConsumer::new(consumer))
     }
 
     fn seek_key(&mut self, key: &K)
@@ -891,7 +913,7 @@ where
     }
 }
 
-pub struct OrdIndexedWSetValueConsumer<'a, K, V, R, O>
+pub struct VecIndexedWSetValueConsumer<'a, K, V, R, O>
 where
     V: 'static,
     R: 'static,
@@ -900,7 +922,7 @@ where
     __type: PhantomData<(K, O)>,
 }
 
-impl<'a, K, V, R, O> OrdIndexedWSetValueConsumer<'a, K, V, R, O> {
+impl<'a, K, V, R, O> VecIndexedWSetValueConsumer<'a, K, V, R, O> {
     #[inline]
     const fn new(consumer: OrderedLayerValues<'a, V, R>) -> Self {
         Self {
@@ -910,7 +932,7 @@ impl<'a, K, V, R, O> OrdIndexedWSetValueConsumer<'a, K, V, R, O> {
     }
 }
 
-impl<'a, K, V, R, O> ValueConsumer<'a, V, R, ()> for OrdIndexedWSetValueConsumer<'a, K, V, R, O> {
+impl<'a, K, V, R, O> ValueConsumer<'a, V, R, ()> for VecIndexedWSetValueConsumer<'a, K, V, R, O> {
     fn value_valid(&self) -> bool {
         self.consumer.value_valid()
     }

@@ -5,8 +5,7 @@ import { getCaseIndependentName } from '$lib/functions/felderaRelation'
 import { displaySQLColumnType } from '$lib/functions/sql'
 import { Field, Relation, SqlType } from '$lib/services/manager'
 import { forwardRef, ReactElement, Ref, useState } from 'react'
-import IconCog from '~icons/bx/cog'
-import IconX from '~icons/bx/x'
+import invariant from 'tiny-invariant'
 
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -21,21 +20,21 @@ import Typography from '@mui/material/Typography'
 import { StoreSettingsFn } from './ImportToolbar'
 import { FieldNames, RngFieldSettings } from './randomData'
 
-const RNG_SUPPORTED_TYPES = [
-  SqlType.BOOLEAN,
-  SqlType.TINYINT,
-  SqlType.SMALLINT,
-  SqlType.INTEGER,
-  SqlType.BIGINT,
-  SqlType.VARCHAR,
-  SqlType.CHAR,
-  SqlType.DOUBLE,
-  SqlType.REAL,
-  SqlType.DECIMAL,
-  SqlType.TIME,
-  SqlType.DATE,
-  SqlType.TIMESTAMP,
-  SqlType.ARRAY
+const RNG_SUPPORTED_TYPES: SqlType[] = [
+  'BOOLEAN',
+  'TINYINT',
+  'SMALLINT',
+  'INTEGER',
+  'BIGINT',
+  'VARCHAR',
+  'CHAR',
+  'DOUBLE',
+  'REAL',
+  'DECIMAL',
+  'TIME',
+  'DATE',
+  'TIMESTAMP',
+  'ARRAY'
 ]
 
 // The state for a RNG method stored in local storage.
@@ -64,6 +63,7 @@ const FieldRngSettings = (props: {
 }) => {
   const { field, index, fieldSettings, setSettings } = props
 
+  invariant(field.columntype.type)
   return (
     <>
       <Grid item xs={12} key={`${getCaseIndependentName(field)}-${index}`}>
@@ -92,7 +92,7 @@ export const RngSettingsDialog = (props: {
 
   return (
     <>
-      <Button size='small' onClick={() => setShow(true)} startIcon={<IconCog />}>
+      <Button size='small' onClick={() => setShow(true)} startIcon={<i className={`bx bx-cog`} style={{}} />}>
         Rng Settings
       </Button>
       <Dialog
@@ -102,7 +102,6 @@ export const RngSettingsDialog = (props: {
         scroll='body'
         onClose={() => setShow(true)}
         TransitionComponent={Transition}
-        onBackdropClick={() => setShow(true)}
       >
         <DialogContent
           sx={{
@@ -117,7 +116,7 @@ export const RngSettingsDialog = (props: {
             onClick={() => setShow(false)}
             sx={{ position: 'absolute', right: '1rem', top: '1rem' }}
           >
-            <IconX />
+            <i className={`bx bx-x`} style={{}} />
           </IconButton>
           <Box sx={{ mb: 8, textAlign: 'center' }}>
             <Typography variant='h5' sx={{ mb: 3 }}>

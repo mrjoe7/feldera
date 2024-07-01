@@ -25,8 +25,9 @@ package org.dbsp.sqlCompiler.ir.expression.literal;
 
 import org.dbsp.sqlCompiler.compiler.errors.UnimplementedException;
 import org.dbsp.sqlCompiler.compiler.errors.UnsupportedException;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.IDBSPNode;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -34,17 +35,13 @@ import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeVec;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeVec;
 import org.dbsp.sqlCompiler.ir.type.primitive.*;
 
 import javax.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
-/**
- * This is not just a base class, it also can be used to represent NULL
- * literals of any type.  Maybe that's a bad idea.
- */
 public abstract class DBSPLiteral extends DBSPExpression {
     public final boolean isNull;
 
@@ -57,6 +54,8 @@ public abstract class DBSPLiteral extends DBSPExpression {
 
     /** Represents a "null" value of the specified type. */
     public static DBSPExpression none(DBSPType type) {
+        if (!type.mayBeNull)
+            throw new RuntimeException(type + " cannot represent NULL");
         if (type.is(DBSPTypeInteger.class)) {
             DBSPTypeInteger it = type.to(DBSPTypeInteger.class);
             if (!it.signed)
@@ -70,6 +69,8 @@ public abstract class DBSPLiteral extends DBSPExpression {
                     return new DBSPI32Literal();
                 case 64:
                     return new DBSPI64Literal();
+                case 128:
+                    return new DBSPI128Literal();
             }
         } else if (type.is(DBSPTypeBool.class)) {
             return new DBSPBoolLiteral();
@@ -111,10 +112,16 @@ public abstract class DBSPLiteral extends DBSPExpression {
         return value;
     }
 
-    /**
-     * True if this and the other literal have the same type and value.
-     */
+    /** True if this and the other literal have the same type and value. */
     public abstract boolean sameValue(@Nullable DBSPLiteral other);
+
+    @Override
+    public boolean equivalent(EquivalenceContext context, DBSPExpression other) {
+        DBSPLiteral otherLiteral = other.as(DBSPLiteral.class);
+        if (otherLiteral == null)
+            return false;
+        return this.sameValue(otherLiteral);
+    }
 
     public boolean mayBeNull() {
         return this.getType().mayBeNull;
@@ -133,9 +140,7 @@ public abstract class DBSPLiteral extends DBSPExpression {
         return this.getType().sameType(other.getType());
     }
 
-    /**
-     * The same literal but with the specified nullability.
-     */
+    /** The same literal but with the specified nullability. */
     public abstract DBSPLiteral getWithNullable(boolean mayBeNull);
 
     @Nullable

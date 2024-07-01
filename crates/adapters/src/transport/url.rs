@@ -1,4 +1,4 @@
-use super::{InputConsumer, InputEndpoint, InputReader, Step};
+use super::{InputConsumer, InputEndpoint, InputReader, Step, TransportInputEndpoint};
 use crate::PipelineState;
 use actix::System;
 use actix_web::http::header::{ByteRangeSpec, ContentRangeSpec, Range, CONTENT_RANGE};
@@ -28,16 +28,18 @@ impl UrlInputEndpoint {
 }
 
 impl InputEndpoint for UrlInputEndpoint {
+    fn is_fault_tolerant(&self) -> bool {
+        false
+    }
+}
+
+impl TransportInputEndpoint for UrlInputEndpoint {
     fn open(
         &self,
         consumer: Box<dyn InputConsumer>,
         _start_step: Step,
     ) -> AnyResult<Box<dyn InputReader>> {
         Ok(Box::new(UrlInputReader::new(&self.config, consumer)?))
-    }
-
-    fn is_fault_tolerant(&self) -> bool {
-        false
     }
 }
 
@@ -365,7 +367,7 @@ bar,false,-10
 
         // Unpause the endpoint, wait for the data to appear at the output.
         endpoint.start(0).unwrap();
-        wait(|| n_recs(&zset) == test_data.len(), DEFAULT_TIMEOUT_MS);
+        wait(|| n_recs(&zset) == test_data.len(), DEFAULT_TIMEOUT_MS).unwrap();
         for (i, upd) in zset.state().flushed.iter().enumerate() {
             assert_eq!(upd.unwrap_insert(), &test_data[i]);
         }
@@ -392,7 +394,8 @@ bar,false,-10
         wait(
             || consumer.state().endpoint_error.is_some(),
             DEFAULT_TIMEOUT_MS,
-        );
+        )
+        .unwrap();
         Ok(())
     }
 
@@ -438,7 +441,7 @@ bar,false,-10
         // on busy CI systems it often seems to take longer, so be generous.
         let timeout_ms = 2000;
         let n1_time = wait(|| n_recs(&zset) >= 10, timeout_ms)
-            .unwrap_or_else(|| panic!("only {} records after {timeout_ms} ms", n_recs(&zset)));
+            .unwrap_or_else(|()| panic!("only {} records after {timeout_ms} ms", n_recs(&zset)));
         let n1 = n_recs(&zset);
         println!("{n1} records took {n1_time} ms to arrive");
 
@@ -462,7 +465,7 @@ bar,false,-10
 
         // Wait for the first 50 records to arrive.
         let n4_time = wait(|| n_recs(&zset) >= 50, 350)
-            .unwrap_or_else(|| panic!("only {} records after 350 ms", n_recs(&zset)));
+            .unwrap_or_else(|()| panic!("only {} records after 350 ms", n_recs(&zset)));
         let n4 = n_recs(&zset);
         println!("{} records took {n4_time} ms longer to arrive", n4 - n3);
 
@@ -500,7 +503,7 @@ bar,false,-10
         // Within 600 ms more, though, we should get all 100 records, but fudge
         // it to 1000 ms.
         let n6_time = wait(|| n_recs(&zset) >= 100, 1000)
-            .unwrap_or_else(|| panic!("only {} records after 1000 ms", n_recs(&zset)));
+            .unwrap_or_else(|()| panic!("only {} records after 1000 ms", n_recs(&zset)));
         let n6 = n_recs(&zset);
         println!("{} more records took {n6_time} ms to arrive", n6 - n5);
 

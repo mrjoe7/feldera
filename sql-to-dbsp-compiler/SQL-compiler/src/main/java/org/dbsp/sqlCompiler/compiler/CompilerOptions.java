@@ -27,30 +27,28 @@ import com.beust.jcommander.DynamicParameter;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.ParametersDelegate;
 import org.apache.calcite.config.Lex;
+import org.dbsp.util.IDiff;
 import org.dbsp.util.SqlLexicalRulesConverter;
 import org.dbsp.util.Utilities;
 
 import javax.annotation.Nullable;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
-/**
- * Packages options for a compiler from SQL to Rust.
- */
+/** Packages options for a compiler from SQL to Rust. */
 @SuppressWarnings("CanBeFinal")
 // These fields cannot be final, since JCommander writes them through reflection.
-public class CompilerOptions {
+public class CompilerOptions implements IDiff<CompilerOptions> {
     /** Options related to the language compiled. */
     @SuppressWarnings("CanBeFinal")
-    public static class Language {
+    public static class Language implements IDiff<Language> {
         /** If true the compiler should generate an incremental streaming circuit. */
         @Parameter(names = "-i", description = "Generate an incremental circuit")
         public boolean incrementalize = false;
         @Parameter(names = "-O", description = "Optimization level (0, 1, or 2)")
         public int optimizationLevel = 2;
-        /**
-         * Useful for development
-         */
+        /** Useful for development */
         public boolean throwOnError = false;
         @Parameter(names = "--alltables", description = "Generate an input for each CREATE TABLE, even if the table is not used by any view")
         public boolean generateInputForEveryTable = false;
@@ -92,13 +90,60 @@ public class CompilerOptions {
                     ", unquotedCasing=" + this.unquotedCasing +
                     '}';
         }
+
+        @Override
+        public String diff(Language other) {
+            if (this.same(other))
+                return "";
+            StringBuilder result = new StringBuilder();
+            result.append("Language{");
+            if (this.incrementalize != other.incrementalize)
+                result.append("incrementalize=")
+                        .append(this.incrementalize)
+                        .append("!=")
+                        .append(other.incrementalize)
+                        .append(System.lineSeparator());
+            if (this.ignoreOrderBy != other.ignoreOrderBy)
+                result.append(", ignoreOrderBy=")
+                        .append(this.ignoreOrderBy)
+                        .append("!=")
+                        .append(other.ignoreOrderBy)
+                        .append(System.lineSeparator());
+            if (this.outputsAreSets != other.outputsAreSets)
+                result.append(", outputsAreSets=")
+                        .append(this.outputsAreSets)
+                        .append("!=")
+                        .append(other.outputsAreSets)
+                        .append(System.lineSeparator());
+            if (this.lexicalRules != other.lexicalRules)
+                result.append(", lexicalRules=")
+                        .append(this.lexicalRules)
+                        .append("!=")
+                        .append(other.lexicalRules)
+                        .append(System.lineSeparator());
+            result.append("}")
+                    .append(System.lineSeparator());
+            return result.toString();
+        }
     }
 
-    /**
-     * Options related to input and output.
-     */
+    public String canonicalName(String name) {
+        return switch (this.languageOptions.unquotedCasing) {
+            case "upper" -> name.toUpperCase(Locale.ENGLISH);
+            case "lower" -> name.toLowerCase(Locale.ENGLISH);
+            default -> name;
+        };
+    }
+
+    @Override
+    public String diff(CompilerOptions other) {
+        return this.languageOptions.diff(other.languageOptions) +
+                this.ioOptions.diff(other.ioOptions);
+    }
+
+    /** Options related to input and output. */
     @SuppressWarnings("CanBeFinal")
-    public static class IO {
+    public static class IO implements IDiff<IO> {
         @DynamicParameter(names = "-T",
                 description = "Specify logging level for a class (can be repeated)")
         public Map<String, String> loggingLevel = new HashMap<>();
@@ -130,8 +175,8 @@ public class CompilerOptions {
         public String metadataSource = "";
 
         /** Only compare fields that matter. */
-        public boolean same(IO ignoredIo) {
-            return true;
+        public boolean same(IO other) {
+            return this.emitHandles == other.emitHandles;
         }
 
         @Override
@@ -140,6 +185,7 @@ public class CompilerOptions {
                     "outputFile=" + Utilities.singleQuote(this.outputFile) +
                     ", metadataSource=" + this.metadataSource +
                     ", emitJpeg=" + this.emitJpeg +
+                    ", emitHandles=" + this.emitHandles +
                     ", emitPng=" + this.emitPng +
                     ", emitJsonErrors=" + this.emitJsonErrors +
                     ", emitJsonSchema=" + Utilities.singleQuote(this.emitJsonSchema) +
@@ -147,6 +193,16 @@ public class CompilerOptions {
                     ", functionName=" + Utilities.singleQuote(this.functionName) +
                     ", verbosity=" + this.verbosity +
                     '}';
+        }
+
+        @Override
+        public String diff(IO other) {
+            if (this.same(other))
+                return "";
+            return "IO{" +
+                    (this.emitHandles != other.emitHandles ? ".emitHandles=" +
+                            this.emitHandles + "!=" + other.emitHandles: "") +
+                    "}";
         }
     }
 
@@ -180,4 +236,8 @@ public class CompilerOptions {
     }
 
     public CompilerOptions() {}
+
+    public static CompilerOptions getDefault() {
+        return new CompilerOptions();
+    }
 }

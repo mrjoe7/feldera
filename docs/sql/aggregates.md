@@ -42,8 +42,32 @@ DECIMAL(10, 4))` if you expect 10-digit results to be possible.
     <th>Description</th>
   </tr>
   <tr>
+     <td><code>ARRAY_AGG([ ALL | DISTINCT ] value [ RESPECT NULLS | IGNORE NULLS ] )</code></td>
+     <td>Gathers all values in an array.  The order of the values in the array is unspecified (but it is deterministic).</td>
+  </tr>
+  <tr>
      <td><code>AVG( [ ALL | DISTINCT ] numeric)</code></td>
      <td>Returns the average (arithmetic mean) of numeric across all input values</td>
+  </tr>
+  <tr>
+     <td><code>ARG_MAX(value, compared)</code></td>
+     <td>Returns <code>value</code> for the maximum value of <code>compared</code> in the group</td>
+  </tr>
+  <tr>
+     <td><code>ARG_MIN(value, compared)</code></td>
+     <td>Returns <code>value</code> for the minimum value of <code>compared</code> in the group</td>
+  </tr>
+  <tr>
+     <td><code>BIT_AND( [ ALL | DISTINCT ] value)</code></td>
+     <td>Returns the bitwise AND of all non-null input values, or null if none; integer and binary types are supported</td>
+  </tr>
+  <tr>
+     <td><code>BIT_OR( [ ALL | DISTINCT ] value)</code></td>
+     <td>Returns the bitwise OR of all non-null input values, or null if none; integer and binary types are supported</td>
+  </tr>
+  <tr>
+     <td><code>BIT_XOR( [ ALL | DISTINCT ] value)</code></td>
+     <td>Returns the bitwise XOR of all non-null input values, or null if none; integer and binary types are supported</td>
   </tr>
   <tr>
      <td><code>COUNT(*)</code></td>
@@ -51,11 +75,19 @@ DECIMAL(10, 4))` if you expect 10-digit results to be possible.
   </tr>
   <tr>
      <td><code>COUNT( [ ALL | DISTINCT ] value [, value ]*)</code></td>
-     <td>Returns the number of input rows for which value is not null (wholly not null if value is composite)</td>
+     <td>Returns the number of input rows for which value is not null.  If the argument contains multiple expressions, it counts only expressions where *all* fields are non-null.</td>
   </tr>
   <tr>
      <td><code>EVERY(condition)</code></td>
      <td>Returns <code>TRUE</code> if all of the values of condition are <code>TRUE</code></td>
+  </tr>
+  <tr>
+     <td><code>LOGICAL_OR</code> or <code>BOOL_OR</code></td>
+     <td>Same as <code>SOME</code></td>
+  </tr>
+  <tr>
+     <td><code>LOGICAL_AND</code> or <code>BOOL_AND</code></td>
+     <td>Same as <code>EVERY</code></td>
   </tr>
   <tr>
      <td><code>MAX( [ ALL | DISTINCT ] value)</code></td>
@@ -74,36 +106,16 @@ DECIMAL(10, 4))` if you expect 10-digit results to be possible.
      <td>Returns the sum of numeric across all input values</td>
   </tr>
   <tr>
-     <td><code>LOGICAL_OR</code> or <code>BOOL_OR</code></td>
-     <td>Same as <code>SOME</code></td>
-  </tr>
-  <tr>
-     <td><code>LOGICAL_AND</code> or <code>BOOL_AND</code></td>
-     <td>Same as <code>EVERY</code></td>
-  </tr>
-  <tr>
-     <td><code>BIT_AND( [ ALL | DISTINCT ] value)</code></td>
-     <td>Returns the bitwise AND of all non-null input values, or null if none; integer and binary types are supported</td>
-  </tr>
-  <tr>
-     <td><code>BIT_OR( [ ALL | DISTINCT ] value)</code></td>
-     <td>Returns the bitwise OR of all non-null input values, or null if none; integer and binary types are supported</td>
-  </tr>
-  <tr>
-     <td><code>BIT_XOR( [ ALL | DISTINCT ] value)</code></td>
-     <td>Returns the bitwise XOR of all non-null input values, or null if none; integer and binary types are supported</td>
-  </tr>
-  <tr>
      <td><code>STDDEV( [ ALL | DISTINCT ] value)</code></td>
      <td>Synonym for <code>STDDEV_SAMP</code></td>
   </tr>
   <tr>
-     <td><code>STDDEV_SAMP( [ ALL | DISTINCT ] value)</code></td>
-     <td>Returns the sample standard deviation of numeric across all input values</td>
-  </tr>
-  <tr>
      <td><code>STDDEV_POP( [ ALL | DISTINCT ] value)</code></td>
      <td>Returns the population standard deviation of numeric across all input values</td>
+  </tr>
+  <tr>
+     <td><code>STDDEV_SAMP( [ ALL | DISTINCT ] value)</code></td>
+     <td>Returns the sample standard deviation of numeric across all input values</td>
   </tr>
 </table>
 
@@ -130,6 +142,10 @@ The following window aggregate functions are supported:
     <th>Description</th>
   </tr>
   <tr>
+    <td>AVG(numeric)</td>
+    <td>Returns the average (arithmetic mean) of numeric across all values in window</td>
+  </tr>
+  <tr>
     <td><code>COUNT(</code>value [, value ]*<code>)</code></td>
     <td>Returns the number of rows in window for which value is not null</td>
   </tr>
@@ -138,32 +154,42 @@ The following window aggregate functions are supported:
     <td>Returns the number of rows in window</td>
   </tr>
   <tr>
-    <td>AVG(numeric)</td>
-    <td>Returns the average (arithmetic mean) of numeric across all values in window</td>
+    <td><code>DENSE_RANK()</code></td>
+    <td>Returns the rank of the current row without gaps</td>
   </tr>
   <tr>
-    <td><code>SUM</code>(numeric)</td>
-    <td>Returns the sum of numeric across all values in window</td>
+    <td><code>LAG(</code><em>expression</em>, [<em>offset</em>, [ <em>default</em> ] ]<code>)</code></td>
+    <td>Returns <em>expression</em> evaluated at the row that is <em>offset</em> rows before the current row
+        within the partition; if there is no such row, instead returns <em>default</em>.
+        Both <em>offset</em> and <em>default</em> are evaluated with respect to the current row.
+        If omitted, <em>offset</em> defaults to 1 and <em>default</em> to <code>NULL</code>.</td>
   </tr>
   <tr>
-    <td><code>MAX</code>(value)</td>
-    <td>Returns the maximum value of value across all values in window</td>
+    <td><code>LEAD(</code><em>expression</em>, [<em>offset</em>, [ <em>default</em> ] ]<code>)</code></td>
+    <td>Returns <em>expression</em> evaluated at the row that is <em>offset</em> rows after the current row
+        within the partition; if there is no such row, instead returns <em>default</em>.
+        Both <em>offset</em> and <em>default</em> are evaluated with respect to the current row.
+        If omitted, <em>offset</em> defaults to 1 and <em>default</em> to <code>NULL</code>.</td>
   </tr>
   <tr>
-    <td><code>MIN</code>(value)</td>
-    <td>Returns the minimum value of value across all values in window</td>
+    <td><code>MAX</code>(<em>expression</em>)</td>
+    <td>Returns the maximum value of <em>expression</em> across all values in window</td>
+  </tr>
+  <tr>
+    <td><code>MIN</code>(<em>expression</em>)</td>
+    <td>Returns the minimum value of <em>expression</em> across all values in window</td>
   </tr>
   <tr>
     <td><code>RANK()</code></td>
     <td>Returns the rank of the current row with gaps</td>
   </tr>
   <tr>
-    <td><code>DENSE_RANK()</code></td>
-    <td>Returns the rank of the current row without gaps</td>
-  </tr>
-  <tr>
     <td><code>ROW_NUMBER()</code></td>
     <td>Returns the number of the current row within its partition, counting from 1</td>
+  </tr>
+  <tr>
+    <td><code>SUM</code>(<em>numeric</em>)</td>
+    <td>Returns the sum of <em>numeric</em> across all values in window</td>
   </tr>
 </table>
 
@@ -273,9 +299,9 @@ year | desks | tables | chairs
 Grouped window functions occur in the `GROUP BY` clause and define a
 key value that represents a window containing several rows.
 
-| Operator syntax      | Description
-|:-------------------- |:-----------
-| TUMBLE(datetime, interval [, time ]) | Indicates a tumbling window of *interval* for *datetime*, optionally aligned at *time*
+| Operator syntax      | Description |
+|:-------------------- |:------------|
+| TUMBLE(datetime, interval [, time ]) | Indicates a tumbling window of *interval* for *datetime*, optionally aligned at *time* |
 
 Here is an example query using a tumbling window:
 
@@ -294,8 +320,8 @@ GROUP BY TUMBLE(pickup, INTERVAL '1' DAY)
 Grouped auxiliary functions allow you to access properties of a window
 defined by a grouped window function.
 
-| Operator syntax      | Description
-|:-------------------- |:-----------
-| TUMBLE_END(expression, interval [, time ]) | Returns the value of *expression* at the end of the window defined by a `TUMBLE` function call
-| TUMBLE_START(expression, interval [, time ]) | Returns the value of *expression* at the beginning of the window defined by a `TUMBLE` function call
+| Operator syntax      | Description |
+|:-------------------- |:------------|
+| TUMBLE_END(expression, interval [, time ]) | Returns the value of *expression* at the end of the window defined by a `TUMBLE` function call |
+| TUMBLE_START(expression, interval [, time ]) | Returns the value of *expression* at the beginning of the window defined by a `TUMBLE` function call |
 

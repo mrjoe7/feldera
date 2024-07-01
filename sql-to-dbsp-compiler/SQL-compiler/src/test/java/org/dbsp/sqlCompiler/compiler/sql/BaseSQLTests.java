@@ -61,7 +61,7 @@ public class BaseSQLTests {
      */
     public static class CompilerCircuitStream {
         final DBSPCompiler compiler;
-        final DBSPCircuit circuit;
+        public final DBSPCircuit circuit;
         final InputOutputChangeStream stream;
 
         public CompilerCircuitStream(DBSPCompiler compiler) {
@@ -164,6 +164,7 @@ public class BaseSQLTests {
     public void testNegativeQuery(String query, String messageFragment) {
         DBSPCompiler compiler = this.noThrowCompiler();
         compiler.compileStatement("CREATE VIEW VV AS " + query);
+        compiler.getFinalCircuit("tmp");
         Assert.assertTrue(compiler.messages.exitCode != 0);
         String message = compiler.messages.toString();
         Assert.assertTrue(message.contains(messageFragment));
@@ -184,8 +185,10 @@ public class BaseSQLTests {
         String[] extraArgs = new String[0];
         for (TestCase test: testsToRun) {
             if (!test.ccs.compiler.options.same(firstCompiler.options))
-                throw new RuntimeException("Tests are not compiled with the same options: "
-                        + test.ccs.compiler.options + " and " + firstCompiler.options);
+                throw new RuntimeException("Test " + Utilities.singleQuote(testsToRun.get(0).javaTestName) +
+                        " and " + Utilities.singleQuote(test.javaTestName) +
+                        " are not compiled with the same options: "
+                        + test.ccs.compiler.options.diff(firstCompiler.options));
             ProgramAndTester pt;
             // Standard test
             pt = new ProgramAndTester(test.ccs.circuit, test.createTesterCode(testNumber, rustDirectory));
@@ -201,6 +204,8 @@ public class BaseSQLTests {
     public void addRustTestCase(
             String name, CompilerCircuitStream ccs) {
         ccs.compiler.messages.show(System.err);
+        if (ccs.compiler.messages.exitCode != 0)
+            throw new RuntimeException("Compilation failed");
         ccs.compiler.messages.clear();
         TestCase test = new TestCase(name, this.currentTestInformation, ccs, null);
         testsToRun.add(test);
@@ -244,8 +249,7 @@ public class BaseSQLTests {
         return new DBSPCompiler(options);
     }
 
-    static DBSPCircuit getCircuit(DBSPCompiler compiler) {
-        compiler.optimize();
+    public static DBSPCircuit getCircuit(DBSPCompiler compiler) {
         String name = "circuit" + testsToRun.size();
         return compiler.getFinalCircuit(name);
     }

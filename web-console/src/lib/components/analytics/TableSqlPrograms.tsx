@@ -15,11 +15,9 @@ import { ApiError, ProgramDescr, ProgramsService, ProgramStatus } from '$lib/ser
 import { mutationUpdateProgram, PipelineManagerQueryKey } from '$lib/services/pipelineManagerQuery'
 import { LS_PREFIX } from '$lib/types/localStorage'
 import { useCallback, useState } from 'react'
-import CustomChip from 'src/@core/components/mui/chip'
 import { match, P } from 'ts-pattern'
-import IconPencil from '~icons/bx/pencil'
-import IconTrashAlt from '~icons/bx/trash-alt'
 
+import CustomChip from '@core/components/mui/chip'
 import { Button, IconButton, Tooltip } from '@mui/material'
 import Box from '@mui/material/Box'
 import Card from '@mui/material/Card'
@@ -56,7 +54,7 @@ const getStatusChipProps = (status: ProgramStatus) =>
     })
     .with('CompilingRust', () => {
       return {
-        label: 'Compiling binary',
+        label: 'Compiling bin',
         color: 'primary' as const,
         'data-testid': 'box-status-compiling-binary',
         tooltip: undefined
@@ -107,27 +105,14 @@ export const TableSqlPrograms = () => {
   // Table columns
   const columns: GridColDef[] = [
     {
-      field: 'program_id',
-      headerName: 'ID',
-      renderCell: (params: GridRenderCellParams) => {
-        const { row } = params
-
-        return (
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-              <Typography noWrap variant='body2' sx={{ color: 'text.primary', fontWeight: 600 }}>
-                {row.program_id}
-              </Typography>
-            </Box>
-          </Box>
-        )
-      }
+      field: 'program_id'
     },
     {
       flex: 0.3,
       minWidth: 150,
       field: 'name',
       headerName: 'Name',
+      display: 'flex',
       renderCell: (params: GridRenderCellParams) => (
         <Typography variant='body2' sx={{ color: 'text.primary' }} data-testid={`box-program-name-${params.row.name}`}>
           {params.row.name}
@@ -147,9 +132,10 @@ export const TableSqlPrograms = () => {
       editable: true
     },
     {
-      flex: 0.5,
+      flex: 0.45,
       field: 'description',
       headerName: 'Description',
+      display: 'flex',
       renderCell: (params: GridRenderCellParams) => (
         <Typography
           variant='body2'
@@ -162,23 +148,25 @@ export const TableSqlPrograms = () => {
       editable: true
     },
     {
-      width: 140,
+      width: 145,
       field: 'status',
       headerName: 'Status',
+      display: 'flex',
       renderCell: (params: GridRenderCellParams) => {
         const { tooltip, ...statusChipProps } = getStatusChipProps(params.row.status)
         return (
           <Tooltip title={tooltip}>
-            <CustomChip rounded size='small' skin='light' {...statusChipProps} />
+            <CustomChip rounded size='small' skin='light' {...statusChipProps} sx={{ width: 125 }} />
           </Tooltip>
         )
       }
     },
     {
-      width: 90,
+      flex: 0.1,
       sortable: false,
       field: 'actions',
       headerName: 'Actions',
+      display: 'flex',
       renderCell: (params: GridRenderCellParams<ProgramDescr>) => {
         return (
           <Box data-testid={'box-program-actions-' + params.row.name}>
@@ -188,12 +176,12 @@ export const TableSqlPrograms = () => {
                 href={`/analytics/editor/?program_name=${params.row.name}`}
                 data-testid='button-edit'
               >
-                <IconPencil fontSize={20} />
+                <i className={`bx bx-pencil`} style={{ fontSize: 24 }} />
               </IconButton>
             </Tooltip>
             <Tooltip title='Delete'>
               <IconButton size='small' onClick={() => deleteProgram(params.row)} data-testid='button-delete'>
-                <IconTrashAlt fontSize={20} />
+                <i className={`bx bx-trash-alt`} style={{ fontSize: 24 }} />
               </IconButton>
             </Tooltip>
           </Box>

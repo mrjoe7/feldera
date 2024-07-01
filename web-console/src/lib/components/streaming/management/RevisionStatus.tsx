@@ -18,10 +18,9 @@ import {
   useRef,
   useState
 } from 'react'
-import { ThemeColor } from 'src/@core/layouts/types'
-import IconPlayCircle from '~icons/bx/play-circle'
-import IconX from '~icons/bx/x'
+import JSONbig from 'true-json-bigint'
 
+import { ThemeColor } from '@core/layouts/types'
 import { DiffEditor, MonacoDiffEditor } from '@monaco-editor/react'
 import TabContext from '@mui/lab/TabContext'
 import TabList from '@mui/lab/TabList'
@@ -141,7 +140,6 @@ export const PipelineConfigDiffDialog = (props: DialogProps) => {
       scroll='body'
       onClose={() => setShow(false)}
       TransitionComponent={Transition}
-      onBackdropClick={() => setShow(false)}
     >
       <DialogContent sx={{ pt: { sm: 8.5 }, position: 'relative' }}>
         <IconButton
@@ -151,7 +149,7 @@ export const PipelineConfigDiffDialog = (props: DialogProps) => {
           }}
           sx={{ position: 'absolute', right: '1rem', top: '1rem' }}
         >
-          <IconX />
+          <i className={`bx bx-x`} style={{}} />
         </IconButton>
         <Box sx={{ mb: 4, textAlign: 'center' }}>
           <Typography variant='h5' sx={{ mb: 3 }}>
@@ -208,7 +206,7 @@ export const PipelineConfigDiffDialog = (props: DialogProps) => {
               variant='contained'
               sx={{ mr: 1 }}
               onClick={handleStart}
-              endIcon={<IconPlayCircle />}
+              endIcon={<i className={`bx bx-play-circle`} style={{}} />}
               disabled={
                 pipeline.state.current_status == PipelineStatus.RUNNING ||
                 pipeline.state.current_status == PipelineStatus.PAUSED
@@ -260,8 +258,8 @@ export const PipelineRevisionStatusChip = (props: { pipeline: Pipeline }) => {
       !curPipelineConfigQuery.isError
     ) {
       const configDiffResult = diffLines(
-        JSON.stringify(pipelineRevisionQuery.data.config, null, 2),
-        JSON.stringify(curPipelineConfigQuery.data, null, 2)
+        JSONbig.stringify(pipelineRevisionQuery.data.config, null, 2),
+        JSONbig.stringify(curPipelineConfigQuery.data, null, 2)
       ).filter(line => line.added || line.removed)
 
       // Distinguish the case where the program is not set in the pipeline
@@ -301,8 +299,8 @@ export const PipelineRevisionStatusChip = (props: { pipeline: Pipeline }) => {
         show={show}
         setShow={setShow}
         diffCount={diffCount}
-        origConfig={JSON.stringify(pipelineRevisionQuery.data?.config || '', null, 2)}
-        newConfig={JSON.stringify(curPipelineConfigQuery.data || '', null, 2)}
+        origConfig={JSONbig.stringify(pipelineRevisionQuery.data?.config || '', null, 2)}
+        newConfig={JSONbig.stringify(curPipelineConfigQuery.data || '', null, 2)}
         origProgram={pipelineRevisionQuery.data?.program.code || ''}
         newProgram={curProgramQuery.data?.code || ''}
         validationError={validationError}

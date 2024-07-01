@@ -1,3 +1,4 @@
+use crate::circuit::checkpointer::Checkpoint;
 use crate::{
     circuit::OwnershipPreference,
     operator::{z1::DelayedId, Z1},
@@ -21,7 +22,7 @@ where
     pub fn stream_fold<A, F>(&self, init: A, fold_func: F) -> Stream<RootCircuit, A>
     where
         F: Fn(A, &T) -> A + 'static,
-        A: Eq + Clone + SizeOf + NumEntries + 'static,
+        A: Checkpoint + Eq + Clone + SizeOf + NumEntries + 'static,
     {
         let (prev_accumulator, feedback) = self.circuit().add_feedback(Z1::new(init));
         let new_accumulator = prev_accumulator.apply2_owned(self, fold_func);

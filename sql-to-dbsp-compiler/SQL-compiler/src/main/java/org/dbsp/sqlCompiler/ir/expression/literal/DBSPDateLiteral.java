@@ -24,7 +24,7 @@
 package org.dbsp.sqlCompiler.ir.expression.literal;
 
 import org.apache.calcite.util.DateString;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -35,7 +35,7 @@ import org.dbsp.util.IIndentStream;
 import javax.annotation.Nullable;
 import java.util.Objects;
 
-public class DBSPDateLiteral extends DBSPLiteral {
+public final class DBSPDateLiteral extends DBSPLiteral {
     @Nullable public final Integer value;
 
     public DBSPDateLiteral(CalciteObject node, DBSPType type, @Nullable Integer value) {

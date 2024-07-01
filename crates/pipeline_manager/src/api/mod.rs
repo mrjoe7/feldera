@@ -31,6 +31,8 @@ use crate::prober::service::{
 };
 
 use crate::auth::JwkCache;
+use crate::compiler;
+use crate::config;
 use crate::probe::Probe;
 use actix_web::dev::Service;
 use actix_web::Scope;
@@ -60,8 +62,10 @@ use crate::db::{
 };
 pub use crate::error::ManagerError;
 use crate::runner::RunnerApi;
+use pipeline_types::config as pipeline_types_config;
 
 use crate::auth::TenantId;
+use crate::demo::Demo;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -134,6 +138,8 @@ request is rejected."
         pipeline::pipeline_action,
         pipeline::pipeline_deployed,
         pipeline::pipeline_delete,
+        pipeline::dump_profile,
+        pipeline::heap_profile,
         connector::list_connectors,
         connector::get_connector,
         connector::new_connector,
@@ -180,12 +186,14 @@ request is rejected."
         pipeline_types::program_schema::SqlType,
         pipeline_types::program_schema::Field,
         pipeline_types::program_schema::ColumnType,
+        pipeline_types::program_schema::IntervalUnit,
         pipeline_types::query::NeighborhoodQuery,
         pipeline_types::query::OutputQuery,
         pipeline_types::config::PipelineConfig,
+        pipeline_types::config::StorageConfig,
+        pipeline_types::config::StorageCacheConfig,
         pipeline_types::config::InputEndpointConfig,
         pipeline_types::config::OutputEndpointConfig,
-        pipeline_types::config::TransportConfig,
         pipeline_types::config::FormatConfig,
         pipeline_types::config::RuntimeConfig,
         pipeline_types::config::ConnectorConfig,
@@ -197,6 +205,8 @@ request is rejected."
         pipeline_types::transport::url::UrlInputConfig,
         pipeline_types::transport::kafka::KafkaInputConfig,
         pipeline_types::transport::kafka::KafkaInputFtConfig,
+        pipeline_types::transport::kafka::KafkaHeader,
+        pipeline_types::transport::kafka::KafkaHeaderValue,
         pipeline_types::transport::kafka::KafkaOutputConfig,
         pipeline_types::transport::kafka::KafkaOutputFtConfig,
         pipeline_types::transport::kafka::KafkaLogLevel,
@@ -206,6 +216,10 @@ request is rejected."
         pipeline_types::transport::s3::ConsumeStrategy,
         pipeline_types::transport::s3::ReadStrategy,
         pipeline_types::transport::s3::S3InputConfig,
+        pipeline_types::transport::delta_table::DeltaTableIngestMode,
+        pipeline_types::transport::delta_table::DeltaTableReaderConfig,
+        pipeline_types::transport::delta_table::DeltaTableWriteMode,
+        pipeline_types::transport::delta_table::DeltaTableWriterConfig,
         pipeline_types::format::csv::CsvEncoderConfig,
         pipeline_types::format::csv::CsvParserConfig,
         pipeline_types::format::json::JsonEncoderConfig,
@@ -261,6 +275,11 @@ request is rejected."
         ServiceProbeResult,
         ServiceProbeError,
         ServiceProbeStatus,
+        compiler::ProgramConfig,
+        config::CompilationProfile,
+        pipeline_types_config::OutputBufferConfig,
+        pipeline_types_config::OutputEndpointConfig,
+        Demo,
     ),),
     tags(
         (name = "Manager", description = "Configure system behavior"),
@@ -313,6 +332,8 @@ fn api_scope() -> Scope {
         .service(pipeline::pipeline_validate)
         .service(pipeline::pipeline_deployed)
         .service(pipeline::pipeline_delete)
+        .service(pipeline::dump_profile)
+        .service(pipeline::heap_profile)
         .service(connector::list_connectors)
         .service(connector::get_connector)
         .service(connector::new_connector)

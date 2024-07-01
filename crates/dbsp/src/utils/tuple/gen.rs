@@ -41,9 +41,7 @@ macro_rules! declare_tuples {
                     Hash,
                     PartialEq,
                     PartialOrd,
-                    derive_more::Add,
                     derive_more::Neg,
-                    derive_more::AddAssign,
                     serde::Serialize,
                     serde::Deserialize,
                     size_of::SizeOf,
@@ -304,6 +302,16 @@ macro_rules! declare_tuples {
              impl<T0: Copy, T1: Copy> Copy for Tup2<T0, T1> {}
             */
             impl<$($element: Copy),*> Copy for $tuple_name<$($element),*> {}
+
+            impl<$($element),*> $crate::circuit::checkpointer::Checkpoint for $tuple_name<$($element),*> {
+                fn checkpoint(&self) -> Result<Vec<u8>, $crate::Error> {
+                    todo!()
+                }
+
+                fn restore(&mut self, _data: &[u8]) -> Result<(), $crate::Error> {
+                    todo!()
+                }
+            }
         )*
     };
 }

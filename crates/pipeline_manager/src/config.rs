@@ -45,7 +45,11 @@ fn default_db_connection_string() -> String {
 }
 
 fn default_binary_ref_port() -> u16 {
-    9090
+    8085
+}
+
+fn default_compilation_profile() -> CompilationProfile {
+    CompilationProfile::Optimized
 }
 
 /// Pipeline manager configuration read from a YAML config file or from command
@@ -168,12 +172,13 @@ pub struct ApiServerConfig {
     #[arg(long)]
     pub dev_mode: bool,
 
-    /// Used for supplying clients like the UI with demos. Administrators
-    /// can use this option to set up environment-specific demos for users
-    /// (e.g., ones that connect to an internal data source).
+    /// Local directory in which demos are stored for supplying clients like the UI with
+    /// a set of demos to present to the user. Administrators can use this option to set
+    /// up environment-specific demos for users (e.g., ones that connect to an internal
+    /// data source).
     #[serde(default)]
     #[arg(long)]
-    pub demos: Vec<String>,
+    pub demos_dir: Option<String>,
 }
 
 impl ApiServerConfig {
@@ -234,18 +239,31 @@ impl ApiServerConfig {
     }
 }
 
-/// Argument to `cargo build --profile <>` passed to the rust compiler
-///
-/// Note that this is a hint to the backend, and can be overriden by
-/// the Feldera instance depending on the administrator configuration.
-#[derive(Parser, Default, Eq, PartialEq, Serialize, Deserialize, Debug, Clone, ToSchema)]
+/// Enumeration of possible compilation profiles that can be passed to the Rust compiler
+/// as an argument via `cargo build --profile <>`. A compilation profile affects among
+/// other things the compilation speed (how long till the program is ready to be run)
+/// and runtime speed (the performance while running).
+#[derive(Parser, Eq, PartialEq, Serialize, Deserialize, Debug, Clone, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CompilationProfile {
+    /// Used primarily for development. Adds source information to binaries.
+    ///
+    /// This corresponds to cargo's out-of-the-box "debug" mode
+    Dev,
     /// Prioritizes compilation speed over runtime speed
     Unoptimized,
     /// Prioritizes runtime speed over compilation speed
-    #[default]
     Optimized,
+}
+
+impl CompilationProfile {
+    fn to_target_folder(&self) -> &'static str {
+        match self {
+            CompilationProfile::Dev => "debug",
+            CompilationProfile::Unoptimized => "unoptimized",
+            CompilationProfile::Optimized => "optimized",
+        }
+    }
 }
 
 impl FromStr for CompilationProfile {
@@ -253,10 +271,11 @@ impl FromStr for CompilationProfile {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "dev" => Ok(CompilationProfile::Dev),
             "unoptimized" => Ok(CompilationProfile::Unoptimized),
             "optimized" => Ok(CompilationProfile::Optimized),
             e => unimplemented!(
-                "Unsupported option {e}. Available choices are 'unoptimized' and 'optimized'"
+                "Unsupported option {e}. Available choices are 'dev', 'unoptimized' and 'optimized'"
             ),
         }
     }
@@ -265,6 +284,7 @@ impl FromStr for CompilationProfile {
 impl Display for CompilationProfile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
+            CompilationProfile::Dev => write!(f, "dev"),
             CompilationProfile::Unoptimized => write!(f, "unoptimized"),
             CompilationProfile::Optimized => write!(f, "optimized"),
         }
@@ -281,18 +301,18 @@ pub struct CompilerConfig {
     #[arg(long, default_value_t = default_working_directory())]
     pub compiler_working_directory: String,
 
-    /// Pick the profile to use for cargo build. Setting this option
-    /// will override any configuration specified by the program
+    /// Profile used for programs that do not explicitly provide their
+    /// own compilation profile in their configuration.
     ///
     /// Available choices are:
-    /// * None: let the program self-specify the profile it wants.
+    /// * 'dev', for development.
     /// * 'unoptimized', for faster compilation times
     /// at the cost of lower runtime performance.
     /// * 'optimized', for faster runtime performance
     /// at the cost of slower compilation times.
-    #[serde(default)]
-    #[arg(long)]
-    pub compilation_profile: Option<CompilationProfile>,
+    #[serde(default = "default_compilation_profile")]
+    #[arg(long, default_value_t = default_compilation_profile())]
+    pub compilation_profile: CompilationProfile,
 
     /// Location of the SQL-to-DBSP compiler.
     #[serde(default = "default_sql_compiler_home")]
@@ -374,7 +394,7 @@ impl CompilerConfig {
         // Always pick the compiler server's compilation profile if it is configured.
         Path::new(&self.workspace_dir())
             .join("target")
-            .join(profile.to_string())
+            .join(profile.to_target_folder())
             .join(Self::crate_name(program_id))
     }
 

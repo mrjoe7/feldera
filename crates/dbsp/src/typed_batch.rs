@@ -6,14 +6,20 @@
 pub use crate::{
     algebra::{
         IndexedZSet as DynIndexedZSet, IndexedZSetReader as DynIndexedZSetReader,
-        OrdIndexedZSet as DynOrdIndexedZSet, OrdZSet as DynOrdZSet, ZSet as DynZSet,
+        OrdIndexedZSet as DynOrdIndexedZSet, OrdZSet as DynOrdZSet,
+        VecIndexedZSet as DynVecIndexedZSet, VecZSet as DynVecZSet, ZSet as DynZSet,
         ZSetReader as DynZSetReader,
     },
     trace::{
-        Batch as DynBatch, BatchReader as DynBatchReader, FileIndexedZSet as DynFileIndexedZSet,
-        FileKeyBatch as DynFileKeyBatch, FileValBatch as DynFileValBatch, FileZSet as DynFileZSet,
+        Batch as DynBatch, BatchReader as DynBatchReader,
+        FallbackIndexedWSet as DynFallbackIndexedWSet, FallbackKeyBatch as DynFallbackKeyBatch,
+        FallbackValBatch as DynFallbackValBatch, FallbackWSet as DynFallbackWSet,
+        FileIndexedWSet as DynFileIndexedWSet, FileKeyBatch as DynFileKeyBatch,
+        FileValBatch as DynFileValBatch, FileWSet as DynFileWSet,
         OrdIndexedWSet as DynOrdIndexedWSet, OrdKeyBatch as DynOrdKeyBatch,
         OrdValBatch as DynOrdValBatch, OrdWSet as DynOrdWSet, Spine as DynSpine, Trace as DynTrace,
+        VecIndexedWSet as DynVecIndexedWSet, VecKeyBatch as DynVecKeyBatch,
+        VecValBatch as DynVecValBatch, VecWSet as DynVecWSet,
     },
     DBData, DBWeight, DynZWeight, Stream, Timestamp, ZWeight,
 };
@@ -26,7 +32,7 @@ use dyn_clone::clone_box;
 use size_of::SizeOf;
 use std::{
     marker::PhantomData,
-    ops::{Add, AddAssign, Deref, DerefMut, Neg},
+    ops::{Deref, DerefMut, Neg},
 };
 
 use crate::{
@@ -75,7 +81,7 @@ pub trait BatchReader: 'static {
 
     fn inner_mut(&mut self) -> &mut Self::Inner;
 
-    /// Drop the statically typed wrapper and return the inner dynamic batch type.  
+    /// Drop the statically typed wrapper and return the inner dynamic batch type.
     fn into_inner(self) -> Self::Inner;
 
     /// Create a statically typed wrapper around `inner`.
@@ -170,12 +176,21 @@ where
 
 /// A statically typed wrapper around a dynamically typed batch `B` with concrete key, value, and
 /// weight types `K`, `V`, and `R` respectively.
-#[derive(Debug, Clone, PartialEq, Eq, SizeOf)]
+#[derive(Debug, Clone, Eq, SizeOf)]
 // repr(transparent) guarantees that we can safely transmute this to `inner`.
 #[repr(transparent)]
 pub struct TypedBatch<K, V, R, B> {
     inner: B,
     phantom: PhantomData<fn(&K, &V, &R)>,
+}
+
+impl<K, V, R, B, B2> PartialEq<TypedBatch<K, V, R, B2>> for TypedBatch<K, V, R, B>
+where
+    B: PartialEq<B2>,
+{
+    fn eq(&self, other: &TypedBatch<K, V, R, B2>) -> bool {
+        self.inner.eq(&other.inner)
+    }
 }
 
 // FIXME: this is needed so that batches can be wrapped in Arc and shared
@@ -247,32 +262,6 @@ where
 {
     fn neg_by_ref(&self) -> Self {
         Self::new(self.inner().neg_by_ref())
-    }
-}
-
-impl<K, V, R, B> Add for TypedBatch<K, V, R, B>
-where
-    B: DynBatchReader + Add<Output = B>,
-    K: DBData + Erase<B::Key>,
-    V: DBData + Erase<B::Val>,
-    R: DBWeight + Erase<B::R>,
-{
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self::new(self.inner.add(rhs.inner))
-    }
-}
-
-impl<K, V, R, B> AddAssign for TypedBatch<K, V, R, B>
-where
-    B: DynBatchReader + AddAssign,
-    K: DBData + Erase<B::Key>,
-    V: DBData + Erase<B::Val>,
-    R: DBWeight + Erase<B::R>,
-{
-    fn add_assign(&mut self, rhs: Self) {
-        self.inner.add_assign(rhs.inner)
     }
 }
 
@@ -451,15 +440,35 @@ pub type OrdKeyBatch<K, T, R, DynR> = TypedBatch<K, (), R, DynOrdKeyBatch<DynDat
 pub type OrdValBatch<K, V, T, R, DynR> =
     TypedBatch<K, V, R, DynOrdValBatch<DynData, DynData, T, DynR>>;
 
-pub type FileWSet<K, R, DynR> = TypedBatch<K, (), R, DynFileZSet<DynData, DynR>>;
-pub type FileZSet<K> = TypedBatch<K, (), ZWeight, DynFileZSet<DynData, DynZWeight>>;
+pub type VecWSet<K, R, DynR> = TypedBatch<K, (), R, DynVecWSet<DynData, DynR>>;
+pub type VecZSet<K> = TypedBatch<K, (), ZWeight, DynVecZSet<DynData>>;
+pub type VecIndexedWSet<K, V, R, DynR> =
+    TypedBatch<K, V, R, DynVecIndexedWSet<DynData, DynData, DynR>>;
+pub type VecIndexedZSet<K, V> = TypedBatch<K, V, ZWeight, DynVecIndexedZSet<DynData, DynData>>;
+pub type VecKeyBatch<K, T, R, DynR> = TypedBatch<K, (), R, DynVecKeyBatch<DynData, T, DynR>>;
+pub type VecValBatch<K, V, T, R, DynR> =
+    TypedBatch<K, V, R, DynVecValBatch<DynData, DynData, T, DynR>>;
+
+pub type FileWSet<K, R, DynR> = TypedBatch<K, (), R, DynFileWSet<DynData, DynR>>;
+pub type FileZSet<K> = TypedBatch<K, (), ZWeight, DynFileWSet<DynData, DynZWeight>>;
 pub type FileIndexedWSet<K, V, R, DynR> =
-    TypedBatch<K, V, R, DynFileIndexedZSet<DynData, DynData, DynR>>;
+    TypedBatch<K, V, R, DynFileIndexedWSet<DynData, DynData, DynR>>;
 pub type FileIndexedZSet<K, V> =
-    TypedBatch<K, V, ZWeight, DynFileIndexedZSet<DynData, DynData, DynZWeight>>;
+    TypedBatch<K, V, ZWeight, DynFileIndexedWSet<DynData, DynData, DynZWeight>>;
 pub type FileKeyBatch<K, T, R, DynR> = TypedBatch<K, (), R, DynFileKeyBatch<DynData, T, DynR>>;
 pub type FileValBatch<K, V, T, R, DynR> =
     TypedBatch<K, V, R, DynFileValBatch<DynData, DynData, T, DynR>>;
+
+pub type FallbackWSet<K, R, DynR> = TypedBatch<K, (), R, DynFallbackWSet<DynData, DynR>>;
+pub type FallbackZSet<K> = TypedBatch<K, (), ZWeight, DynFallbackWSet<DynData, DynZWeight>>;
+pub type FallbackIndexedWSet<K, V, R, DynR> =
+    TypedBatch<K, V, R, DynFallbackIndexedWSet<DynData, DynData, DynR>>;
+pub type FallbackIndexedZSet<K, V> =
+    TypedBatch<K, V, ZWeight, DynFallbackIndexedWSet<DynData, DynData, DynZWeight>>;
+pub type FallbackKeyBatch<K, T, R, DynR> =
+    TypedBatch<K, (), R, DynFallbackKeyBatch<DynData, T, DynR>>;
+pub type FallbackValBatch<K, V, T, R, DynR> =
+    TypedBatch<K, V, R, DynFallbackValBatch<DynData, DynData, T, DynR>>;
 
 pub type Spine<B> = TypedBatch<
     <B as BatchReader>::Key,

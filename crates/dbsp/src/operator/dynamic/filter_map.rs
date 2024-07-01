@@ -1,7 +1,6 @@
 //! Filter and transform data record-by-record.
 
-use crate::trace::ord::file::indexed_zset_batch::FileIndexedZSet;
-use crate::trace::ord::file::zset_batch::FileZSet;
+use crate::trace::VecWSet;
 use crate::{
     circuit::{
         operator_traits::{Operator, UnaryOperator},
@@ -9,8 +8,8 @@ use crate::{
     },
     dynamic::{ClonableTrait, DataTrait, DynPair, DynUnit, WeightTrait},
     trace::{
-        Batch, BatchFactories, BatchReader, BatchReaderFactories, Builder, Cursor, OrdIndexedWSet,
-        OrdIndexedWSetFactories, OrdWSet, OrdWSetFactories,
+        ord::vec::VecIndexedWSet, Batch, BatchFactories, BatchReader, BatchReaderFactories,
+        Builder, Cursor, OrdIndexedWSet, OrdIndexedWSetFactories, OrdWSet, OrdWSetFactories,
     },
 };
 use std::{borrow::Cow, marker::PhantomData};
@@ -63,7 +62,7 @@ impl<C: Circuit, B: DynFilterMap> Stream<C, B> {
 
     /// Behaves as [`Self::dyn_map`] followed by
     /// [`index`](`crate::Stream::index`), but is more efficient.  Assembles
-    /// output records into `OrdIndexedZSet` batches.
+    /// output records into `VecIndexedZSet` batches.
     pub fn dyn_map_index<K: DataTrait + ?Sized, V: DataTrait + ?Sized>(
         &self,
         output_factories: &OrdIndexedWSetFactories<K, V, B::R>,
@@ -115,7 +114,7 @@ impl<C: Circuit, B: DynFilterMap> Stream<C, B> {
     }
 }
 
-// This impl for VecZSet is identical to the one for FileZSet below.  There
+// This impl for VecZSet is identical to the one for FallbackWSet below.  There
 // doesn't seem to be a good way to avoid the code duplication short of a macro.
 impl<K, R> DynFilterMap for OrdWSet<K, R>
 where
@@ -233,7 +232,7 @@ where
     }
 }
 
-impl<K, R> DynFilterMap for FileZSet<K, R>
+impl<K, R> DynFilterMap for VecWSet<K, R>
 where
     K: DataTrait + ?Sized,
     R: WeightTrait + ?Sized,
@@ -290,7 +289,7 @@ where
     }
 }
 
-impl<K, V, R> DynFilterMap for FileIndexedZSet<K, V, R>
+impl<K, V, R> DynFilterMap for VecIndexedWSet<K, V, R>
 where
     K: DataTrait + ?Sized,
     V: DataTrait + ?Sized,

@@ -1,5 +1,6 @@
 //! Integration operators.
 
+use crate::circuit::checkpointer::Checkpoint;
 use crate::{
     algebra::{AddAssignByRef, AddByRef, HasZero},
     circuit::{Circuit, GlobalNodeId, OwnershipPreference, Stream},
@@ -12,7 +13,6 @@ use crate::{
     NumEntries,
 };
 use size_of::SizeOf;
-use std::ops::Add;
 
 circuit_cache_key!(IntegralId<C, D>(GlobalNodeId => Stream<C, D>));
 circuit_cache_key!(NestedIntegralId<C, D>(GlobalNodeId => Stream<C, D>));
@@ -20,7 +20,7 @@ circuit_cache_key!(NestedIntegralId<C, D>(GlobalNodeId => Stream<C, D>));
 impl<C, D> Stream<C, D>
 where
     C: Circuit,
-    D: Add<Output = D>
+    D: Checkpoint
         + AddByRef
         + AddAssignByRef
         + Clone

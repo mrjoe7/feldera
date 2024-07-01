@@ -26,26 +26,30 @@ package org.dbsp.sqlCompiler.compiler.frontend.statements;
 import org.apache.calcite.schema.impl.AbstractTable;
 import org.apache.calcite.sql.SqlNode;
 import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.RelColumnMetadata;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 
 import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Map;
 
-/**
- * Base class for CreateTableStatement and CreateViewStatement.
- */
-public abstract class CreateRelationStatement extends FrontEndStatement implements IHasSchema {
+/** Base class for CreateTableStatement and CreateViewStatement. */
+public abstract class CreateRelationStatement
+        extends FrontEndStatement
+        implements IHasSchema {
     public final String relationName;
     public final boolean nameIsQuoted;
     public final List<RelColumnMetadata> columns;
+    @Nullable final Map<String, String> properties;
 
     protected CreateRelationStatement(SqlNode node, String statement, String relationName,
-                                      boolean nameIsQuoted, @Nullable String comment,
-                                      List<RelColumnMetadata> columns) {
-        super(node, statement, comment);
+                                      boolean nameIsQuoted,
+                                      List<RelColumnMetadata> columns,
+                                      @Nullable Map<String, String> properties) {
+        super(node, statement);
         this.nameIsQuoted = nameIsQuoted;
         this.relationName = relationName;
         this.columns = columns;
+        this.properties = properties;
     }
 
     public AbstractTable getEmulatedTable() {
@@ -60,11 +64,26 @@ public abstract class CreateRelationStatement extends FrontEndStatement implemen
         return this.columns;
     }
 
+    @Nullable public Map<String, String> getProperties() { return this.properties; }
+
+    @Nullable
+    public String getPropertyValue(String property) {
+        if (this.properties == null)
+            return null;
+        return this.properties.get(property);
+    }
+
     @Override
     public String toString() {
+        StringBuilder builder = new StringBuilder();
+        for (RelColumnMetadata col: this.columns) {
+            builder.append(col.toString());
+            builder.append(",");
+        }
+
         return "CreateRelationStatement{" +
                 "tableName='" + this.relationName + '\'' +
-                ", columns=" + this.columns +
+                ", columns=" + builder +
                 '}';
     }
 

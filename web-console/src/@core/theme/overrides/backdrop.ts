@@ -1,5 +1,4 @@
-import { hexToRGBA } from 'src/@core/utils/hex-to-rgba'
-
+import { hexToRGBA } from '@core/utils/hex-to-rgba'
 import { Theme } from '@mui/material/styles'
 
 const Backdrop = (theme: Theme) => {
@@ -9,7 +8,7 @@ const Backdrop = (theme: Theme) => {
         root: {
           backgroundColor:
             theme.palette.mode === 'light'
-              ? `rgba(${theme.palette.customColors.main}, 0.7)`
+              ? hexToRGBA(theme.palette.customColors.main, 0.7)
               : hexToRGBA(theme.palette.background.default, 0.7)
         },
         invisible: {

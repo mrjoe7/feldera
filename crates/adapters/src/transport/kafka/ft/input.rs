@@ -1,11 +1,10 @@
 use super::{count_partitions_in_topic, Ctp, DataConsumerContext, ErrorHandler, POLL_TIMEOUT};
 use crate::transport::kafka::ft::check_fatal_errors;
-use crate::transport::{InputReader, Step};
-use crate::{InputConsumer, InputEndpoint};
+use crate::transport::{InputEndpoint, InputReader, Step};
+use crate::{InputConsumer, TransportInputEndpoint};
 use anyhow::{anyhow, bail, Context, Error as AnyError, Result as AnyResult};
 use crossbeam::sync::{Parker, Unparker};
 use futures::executor::block_on;
-use log::{debug, error, info, warn};
 use pipeline_types::transport::kafka::KafkaInputConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic};
 use rdkafka::config::{FromClientConfig, FromClientConfigAndContext};
@@ -32,6 +31,7 @@ use std::{
     sync::{Arc, Mutex},
     thread::{Builder, JoinHandle},
 };
+use tracing::{debug, error, info, warn};
 
 use super::CommonConfig;
 
@@ -673,6 +673,14 @@ impl InputEndpoint for Endpoint {
         Ok(steps.unwrap())
     }
 
+    fn is_fault_tolerant(&self) -> bool {
+        true
+    }
+
+    fn expire(&self, _step: Step) {}
+}
+
+impl TransportInputEndpoint for Endpoint {
     fn open(
         &self,
         consumer: Box<dyn InputConsumer>,
@@ -680,12 +688,6 @@ impl InputEndpoint for Endpoint {
     ) -> AnyResult<Box<dyn InputReader>> {
         Ok(Box::new(Reader::new(&self.0, start_step, consumer)))
     }
-
-    fn is_fault_tolerant(&self) -> bool {
-        true
-    }
-
-    fn expire(&self, _step: Step) {}
 }
 
 struct IndexProducerContext {

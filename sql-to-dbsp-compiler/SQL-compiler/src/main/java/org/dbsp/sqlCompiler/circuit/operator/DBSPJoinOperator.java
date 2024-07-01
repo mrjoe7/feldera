@@ -23,26 +23,24 @@
 
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 
 /** Corresponds to a DBSP join operator, which may include multiple integrators. */
-public class DBSPJoinOperator extends DBSPOperator {
+public final class DBSPJoinOperator extends DBSPBinaryOperator {
     public DBSPJoinOperator(
             CalciteObject node, DBSPTypeZSet outputType,
             DBSPExpression function, boolean isMultiset,
             DBSPOperator left, DBSPOperator right) {
-        super(node, "join", function, outputType, isMultiset);
-        this.addInput(left);
-        this.addInput(right);
+        super(node, "join", function, outputType, isMultiset, left, right);
         this.checkResultType(function, this.getOutputZSetElementType());
     }
 
@@ -51,7 +49,7 @@ public class DBSPJoinOperator extends DBSPOperator {
         return new DBSPJoinOperator(
                 this.getNode(), outputType.to(DBSPTypeZSet.class),
                 Objects.requireNonNull(expression),
-                this.isMultiset, this.inputs.get(0), this.inputs.get(1));
+                this.isMultiset, this.left(), this.right());
     }
 
     @Override

@@ -33,7 +33,7 @@ import org.dbsp.util.IIndentStream;
 /**
  * Rust supports parameters with patterns, but we don't.
  * We only use simple parameters, with a single name. */
-public class DBSPParameter extends DBSPNode implements
+public final class DBSPParameter extends DBSPNode implements
         IHasType, IDBSPInnerNode, IDBSPDeclaration {
     public final String name;
     public final DBSPType type;
@@ -44,9 +44,7 @@ public class DBSPParameter extends DBSPNode implements
         this.type = type;
     }
 
-    /**
-     * Return a variable that refers to the parameter.
-     */
+    /** Return a variable that refers to the parameter. */
     public DBSPVariablePath asVariable() {
         return new DBSPVariablePath(this.name, this.type);
     }

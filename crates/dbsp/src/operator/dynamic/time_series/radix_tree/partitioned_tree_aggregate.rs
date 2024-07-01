@@ -16,7 +16,10 @@ use crate::{
         },
         trace::{TraceBounds, TraceFeedback},
     },
-    trace::{cursor::CursorEmpty, BatchReader, BatchReaderFactories, Builder, Cursor, Spine},
+    trace::{
+        cursor::CursorEmpty, ord::fallback::indexed_wset::FallbackIndexedWSet, BatchReader,
+        BatchReaderFactories, Builder, Cursor, Spine,
+    },
     utils::Tup2,
     Circuit, DBData, DynZWeight, RootCircuit, Stream, ZWeight,
 };
@@ -54,8 +57,11 @@ impl<TS: DBData + PrimInt, A: DataTrait + ?Sized, B> PartitionedRadixTreeReader<
 pub type OrdPartitionedRadixTree<PK, TS, A> =
     OrdIndexedZSet<PK, DynPair<DynPrefix<TS>, DynTreeNode<TS, A>>>;
 
-pub type OrdPartitionedRadixTreeFactories<PK, TS, A> =
-    <OrdPartitionedRadixTree<PK, TS, A> as BatchReader>::Factories;
+pub type FilePartitionedRadixTree<PK, TS, A> =
+    FallbackIndexedWSet<PK, DynPair<DynPrefix<TS>, DynTreeNode<TS, A>>, DynZWeight>;
+
+pub type FilePartitionedRadixTreeFactories<PK, TS, A> =
+    <FilePartitionedRadixTree<PK, TS, A> as BatchReader>::Factories;
 
 pub type OrdPartitionedRadixTreeStream<PK, TS, A> =
     Stream<RootCircuit, OrdPartitionedRadixTree<PK, TS, A>>;
@@ -69,6 +75,7 @@ where
     V: DataTrait + ?Sized,
 {
     input_factories: Z::Factories,
+    stored_factories: Z::Factories,
     output_factories: O::Factories,
     radix_tree_factories: RadixTreeFactories<TS, Acc>,
     phantom: PhantomData<fn(&TS, &V)>,
@@ -90,6 +97,7 @@ where
     {
         Self {
             input_factories: BatchReaderFactories::new::<KType, Tup2<TS, VType>, ZWeight>(),
+            stored_factories: BatchReaderFactories::new::<KType, Tup2<TS, VType>, ZWeight>(),
             output_factories: BatchReaderFactories::new::<
                 KType,
                 Tup2<Prefix<TS>, TreeNode<TS, AType>>,
@@ -112,6 +120,7 @@ where
     fn clone(&self) -> Self {
         Self {
             input_factories: self.input_factories.clone(),
+            stored_factories: self.stored_factories.clone(),
             output_factories: self.output_factories.clone(),
             radix_tree_factories: self.radix_tree_factories.clone(),
             phantom: PhantomData,
@@ -128,6 +137,7 @@ pub type OrdPartitionedTreeAggregateFactories<TS, V, Z, Acc> = PartitionedTreeAg
 >;
 
 /// Cursor over partitioned radix tree.
+#[allow(unused)]
 pub trait PartitionedRadixTreeCursor<PK, TS, A>:
     Cursor<PK, DynPair<DynPrefix<TS>, DynTreeNode<TS, A>>, (), DynZWeight> + Sized
 where
@@ -262,7 +272,7 @@ where
                     .add_ternary_operator(
                         PartitionedRadixTreeAggregate::new(factories, aggregator),
                         &stream,
-                        &stream.dyn_integrate_trace(&factories.input_factories),
+                        &stream.dyn_integrate_trace(&factories.stored_factories),
                         &feedback.delayed_trace,
                     )
                     .mark_sharded();
@@ -508,7 +518,7 @@ mod test {
         OrdPartitionedRadixTree, PartitionCursor, PartitionedRadixTreeCursor,
     };
     use crate::{
-        algebra::{DefaultSemigroup, Semigroup},
+        algebra::{AddAssignByRef, DefaultSemigroup, Semigroup},
         dynamic::{DowncastTrait, DynData, DynDataTyped, DynPair, Erase},
         operator::{
             dynamic::{
@@ -525,7 +535,6 @@ mod test {
     use num::PrimInt;
     use std::{
         collections::{btree_map::Entry, BTreeMap},
-        ops::AddAssign,
         sync::{Arc, Mutex},
     };
 
@@ -613,8 +622,9 @@ mod test {
                     &DynAggregatorImpl::new(aggregator),
                 );
 
+            let factory = BatchReaderFactories::new::<u64, Tup2<Prefix<u64>, TreeNode<u64, u64>>, ZWeight>();
             aggregate
-                .dyn_integrate_trace(&BatchReaderFactories::new::<u64, Tup2<Prefix<u64>, TreeNode<u64, u64>>, ZWeight>())
+                .dyn_integrate_trace(&factory)
                 .apply(move |tree_trace| {
                     println!("Radix trees:");
                     let mut treestr = String::new();
@@ -623,7 +633,7 @@ mod test {
                     tree_trace
                         .cursor()
                         .validate(&contents_clone.lock().unwrap(), &|acc, val| {
-                            acc.downcast_mut_checked::<u64>().add_assign(val.downcast_checked::<u64>())
+                            acc.downcast_mut_checked::<u64>().add_assign_by_ref(&val.downcast_checked::<u64>())
                         });
                     test_partitioned_aggregate_range::<u64, u64, u64, _, DefaultSemigroup<_>>(
                         &mut tree_trace.cursor(),

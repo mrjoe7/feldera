@@ -1,7 +1,11 @@
 package org.dbsp.sqlCompiler.compiler.sql;
 
+import org.dbsp.sqlCompiler.circuit.DBSPCircuit;
 import org.dbsp.sqlCompiler.compiler.CompilerOptions;
 import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
+import org.dbsp.sqlCompiler.compiler.StderrErrorReporter;
+import org.dbsp.sqlCompiler.compiler.backend.rust.ToRustVisitor;
+import org.junit.Assert;
 import org.junit.Test;
 
 /** Tests that emit Rust code using the catalog. */
@@ -11,6 +15,59 @@ public class CatalogTests extends BaseSQLTests {
         CompilerOptions result = super.testOptions(incremental, optimize);
         result.ioOptions.emitHandles = false;
         return result;
+    }
+
+    @Test
+    public void issue1894() {
+        String sql = """
+                CREATE TYPE trans AS (
+                    category STRING
+                );
+                """;
+        this.compileRustTestCase(sql);
+    }
+
+    @Test
+    public void issue1755() {
+        String sql = """
+                CREATE TYPE CustomType AS (
+                    version TINYINT not null
+                );
+                
+                CREATE TABLE Data (
+                    id BIGINT not null primary key,
+                    msg CustomType
+                );""";
+        this.compileRustTestCase(sql);
+    }
+
+    @Test
+    public void issue1755_2() {
+        String sql = """
+                CREATE TYPE ADDRESS AS (
+                   address_type    VARCHAR,
+                   address         VARCHAR
+                );
+                
+                CREATE TYPE CustomType AS (
+                    version TINYINT not null,
+                    address ADDRESS
+                );
+                
+                CREATE TABLE Data (
+                    id BIGINT not null primary key,
+                    msg CustomType
+                );""";
+        this.compileRustTestCase(sql);
+    }
+
+    @Test
+    public void issue1941() {
+        String sql = """
+                CREATE TABLE Data (
+                    map MAP<INT, INT>
+                );""";
+        this.compileRustTestCase(sql);
     }
 
     @Test
@@ -185,7 +242,21 @@ public class CatalogTests extends BaseSQLTests {
         DBSPCompiler compiler = testCompiler();
         compiler.compileStatements(statements);
         CompilerCircuitStream ccs = new CompilerCircuitStream(compiler);
-        this.addRustTestCase("docTest", ccs);
+        this.addRustTestCase("testComplex", ccs);
+    }
+
+    // Test for https://github.com/feldera/feldera/issues/1666
+    @Test
+    public void viewColumnsTest() {
+        String sql = """
+                CREATE TABLE t(v INT);
+                CREATE VIEW V (sum) AS SELECT SUM(v) FROM T;
+                """;
+        DBSPCompiler compiler = testCompiler();
+        compiler.compileStatements(sql);
+        DBSPCircuit circuit = getCircuit(compiler);
+        String string = ToRustVisitor.toRustString(new StderrErrorReporter(), circuit, compiler.options);
+        Assert.assertTrue(string.contains("serde(rename = \"SUM\")"));
     }
 
     // Test for https://github.com/feldera/feldera/issues/1151
@@ -201,16 +272,32 @@ public class CatalogTests extends BaseSQLTests {
     }
 
     @Test
-    public void updateTest() {
+    public void primaryKeyTest2() {
         String sql = """
                 create table t1(
-                            id1 bigint not null,
-                            id2 bigint,
-                            str1 varchar not null,
-                            str2 varchar,
-                            int1 bigint not null,
-                            int2 bigint,
-                            primary key(id1, id2))""";
+                   id1 bigint not null,
+                   id2 bigint,
+                   str1 varchar not null,
+                   str2 varchar,
+                   int1 bigint not null,
+                   int2 bigint,
+                   primary key(id1, id2)
+                )""";
+        DBSPCompiler compiler = testCompiler();
+        compiler.compileStatements(sql);
+        CompilerCircuitStream ccs = new CompilerCircuitStream(compiler);
+        this.addRustTestCase(sql, ccs);
+    }
+
+    @Test
+    public void materializedTest2() {
+        String sql = """
+                create table T(
+                   I int not null
+                ) with (
+                   'materialized' = 'true'
+                );
+                create materialized view V as SELECT * FROM T;""";
         DBSPCompiler compiler = testCompiler();
         compiler.compileStatements(sql);
         CompilerCircuitStream ccs = new CompilerCircuitStream(compiler);

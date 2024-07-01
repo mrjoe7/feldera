@@ -11,8 +11,8 @@ import { Direction } from '$lib/types/connectors'
 import { ConnectorDialogProps } from '$lib/types/connectors/ConnectorDialogProps'
 import { useEffect, useState } from 'react'
 import { FormContainer } from 'react-hook-form-mui'
+import JSONbig from 'true-json-bigint'
 import * as va from 'valibot'
-import IconX from '~icons/bx/x'
 
 import { valibotResolver } from '@hookform/resolvers/valibot'
 import Box from '@mui/material/Box'
@@ -76,6 +76,7 @@ export const ConfigEditorDialog = (props: ConnectorDialogProps) => {
     >
       <FormContainer
         resolver={valibotResolver(schema)}
+        mode='onChange'
         values={curValues}
         defaultValues={defaultValues}
         FormProps={{}}
@@ -87,7 +88,7 @@ export const ConfigEditorDialog = (props: ConnectorDialogProps) => {
             onClick={() => props.setShow(false)}
             sx={{ position: 'absolute', right: '1rem', top: '1rem' }}
           >
-            <IconX />
+            <i className={`bx bx-x`} style={{}} />
           </IconButton>
           <Box sx={{ mb: 8, textAlign: 'center' }}>
             <Typography variant='h5' sx={{ mb: 3 }}>
@@ -98,8 +99,8 @@ export const ConfigEditorDialog = (props: ConnectorDialogProps) => {
           <GenericEditorForm
             disabled={props.disabled}
             direction={Direction.INPUT}
-            configFromText={config => JSON.parse(config)}
-            configToText={config => JSON.stringify(config, null, 2)}
+            configFromText={config => JSONbig.parse(config)}
+            configToText={config => JSONbig.stringify(config, null, 2)}
           ></GenericEditorForm>
         </DialogContent>
         <DialogActions sx={{ pb: { xs: 8, sm: 12.5 }, justifyContent: 'center' }}>

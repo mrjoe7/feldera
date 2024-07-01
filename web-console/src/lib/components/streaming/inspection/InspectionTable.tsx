@@ -12,24 +12,17 @@ import useQuantiles from '$lib/compositions/streaming/inspection/useQuantiles'
 import { useTableUpdater } from '$lib/compositions/streaming/inspection/useTableUpdater'
 import { usePipelineManagerQuery } from '$lib/compositions/usePipelineManagerQuery'
 import { useAsyncError } from '$lib/functions/common/react'
-import { Row, sqlValueComparator, SQLValueJS, sqlValueToXgressJSON } from '$lib/functions/ddl'
 import { caseDependentNameEq, getCaseDependentName, getCaseIndependentName } from '$lib/functions/felderaRelation'
+import { Row, sqlValueComparator, SQLValueJS, sqlValueToXgressJSON } from '$lib/functions/sqlValue'
 import { EgressMode, Field, NeighborhoodQuery, OutputQuery, Relation } from '$lib/services/manager'
 import { LS_PREFIX } from '$lib/types/localStorage'
-import { Pipeline } from '$lib/types/pipeline'
-import { useCallback, useEffect, useState } from 'react'
+import { Pipeline, PipelineStatus } from '$lib/types/pipeline'
+import { ReactNode, useCallback, useEffect, useState } from 'react'
 import invariant from 'tiny-invariant'
-import IconResume from '~icons/bx/caret-right-circle'
-import IconPause from '~icons/bx/pause-circle'
 
 import { IconButton, Tooltip } from '@mui/material'
 import Card from '@mui/material/Card'
-import {
-  GridPaginationModel,
-  GridRenderCellParams,
-  GridRowSelectionModel,
-  GridValueGetterParams
-} from '@mui/x-data-grid-pro'
+import { GridColDef, GridPaginationModel, GridRenderCellParams, GridRowSelectionModel } from '@mui/x-data-grid-pro'
 import { useQuery } from '@tanstack/react-query'
 
 const FETCH_QUANTILES = 100
@@ -58,6 +51,17 @@ const INITIAL_PAGINATION_MODEL: GridPaginationModel = { pageSize: PAGE_SIZE, pag
 // API.
 export function rowToAnchor(relation: Relation, row: { record: Record<string, SQLValueJS> }) {
   return relation.fields.map(field => sqlValueToXgressJSON(field.columntype, row.record[field.name]))
+}
+
+// augment the props for the toolbar slot
+declare module '@mui/x-data-grid-pro' {
+  interface ToolbarPropsOverrides {
+    pipelineName: string
+    status: PipelineStatus
+    relation: Relation
+    isReadonly: boolean
+    before: ReactNode
+  }
 }
 
 /**
@@ -121,6 +125,7 @@ const useInspectionTable = ({ pipeline, caseIndependentName }: InspectionTablePr
         'json',
         OutputQuery.NEIGHBORHOOD,
         EgressMode.WATCH,
+        undefined,
         undefined,
         undefined,
         neighborhood
@@ -331,15 +336,14 @@ const InspectionTableImpl = ({
         density='compact'
         getRowId={(row: Row) => row.genId}
         columns={[
-          ...relation.fields.map((col: Field) => {
+          ...relation.fields.map((col: Field): GridColDef<Row> => {
             return {
               field: getCaseIndependentName(col),
               headerName: getCaseIndependentName(col),
               description: getCaseIndependentName(col),
               width: 150,
-              valueGetter: (params: GridValueGetterParams<Row>) => {
-                return params.row.record[col.name]
-              },
+              display: 'flex',
+              valueGetter: (_, row) => row.record[getCaseIndependentName(col)],
               renderHeader: () => <SQLTypeHeader col={col}></SQLTypeHeader>,
               renderCell: (props: GridRenderCellParams) => (
                 <SQLValueDisplay value={props.value} type={col.columntype} />
@@ -352,7 +356,7 @@ const InspectionTableImpl = ({
             headerName: 'genId',
             description: 'Index relative to the current paginated set of rows.',
             flex: 0.5,
-            valueGetter: (params: GridValueGetterParams<Row>) => params.row.genId,
+            valueGetter: (_, row) => row.genId,
             renderHeader: () => <></>
           },
           {
@@ -360,7 +364,7 @@ const InspectionTableImpl = ({
             headerName: 'Row Count',
             description: 'Counts how many times this row appears in the database.',
             flex: 0.5,
-            valueGetter: (params: GridValueGetterParams<Row>) => params.row.weight,
+            valueGetter: (_, row) => row.weight,
             renderHeader: () => <></>
           }
         ]}
@@ -395,14 +399,14 @@ const InspectionTableImpl = ({
               !!pause && (
                 <Tooltip title='Pause streaming row updates' key='pause'>
                   <IconButton onClick={pause}>
-                    <IconPause></IconPause>
+                    <i className='bx bx-pause-circle' />
                   </IconButton>
                 </Tooltip>
               ),
               !!resume && (
                 <Tooltip title='Resume streaming row updates' key='resume'>
                   <IconButton onClick={resume}>
-                    <IconResume></IconResume>
+                    <i className='bx bx-caret-right-circle' />
                   </IconButton>
                 </Tooltip>
               )

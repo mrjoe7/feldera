@@ -3,7 +3,7 @@ package org.dbsp.sqlCompiler.compiler.sql;
 import org.apache.calcite.util.ConversionUtil;
 import org.apache.calcite.util.TimeString;
 import org.dbsp.sqlCompiler.compiler.errors.UnimplementedException;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.sql.simple.Change;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
@@ -28,8 +28,8 @@ import org.dbsp.sqlCompiler.ir.expression.literal.DBSPZSetLiteral;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTupleBase;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeVec;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeVec;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBinary;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBool;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeDate;
@@ -96,7 +96,7 @@ public class TableParser {
             }
             return new DBSPTimestampLiteral(out, mayBeNull);
         }
-        throw new RuntimeException("Could not parse " + timestamp);
+        throw new RuntimeException("Could not parse " + timestamp + " as timestamp");
     }
 
     /** Convert a date from the MM-DD-YYYY format (which is used in the Postgres output)
@@ -305,7 +305,7 @@ public class TableParser {
                     result = new DBSPVecLiteral(fieldType.mayBeNull, fields);
                 } else {
                     // empty vector
-                    result = new DBSPVecLiteral(vec.getElementType());
+                    result = new DBSPVecLiteral(vec, false);
                 }
             }
         } else if (fieldType.is(DBSPTypeBinary.class)) {
@@ -423,7 +423,7 @@ public class TableParser {
             result.add(row);
         }
         if (inHeader)
-            throw new RuntimeException("Could not find end of header for table");
+            throw new RuntimeException("Could not find end of header for table " + table);
         return new Change(result);
     }
 }

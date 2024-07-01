@@ -6,6 +6,7 @@
 //! - Long intervals, representing differences between months. These are
 //!   represented as days.
 
+use crate::ToWindowBound;
 use dbsp::num_entries_scalar;
 use num::PrimInt;
 use pipeline_types::{deserialize_without_context, serialize_without_context};
@@ -45,6 +46,24 @@ impl ShortInterval {
     pub fn milliseconds(&self) -> i64 {
         self.milliseconds
     }
+
+    pub fn nanoseconds(&self) -> i64 {
+        self.milliseconds * 1_000_000_i64
+    }
+}
+
+impl ToWindowBound<u128> for ShortInterval {
+    fn to_bound(&self) -> u128 {
+        (self.milliseconds / 1000 / 86400) as u128
+    }
+}
+
+// This trait is used when converting to DATE offets
+// In this case we convert the number to days
+impl ToWindowBound<u64> for ShortInterval {
+    fn to_bound(&self) -> u64 {
+        (self.milliseconds / 1000 / 86400) as u64
+    }
 }
 
 impl<T> Mul<T> for ShortInterval
@@ -64,6 +83,7 @@ where
 impl<T> From<T> for ShortInterval
 where
     i64: From<T>,
+    T: PrimInt,
 {
     fn from(value: T) -> Self {
         Self {
@@ -98,16 +118,24 @@ deserialize_without_context!(ShortInterval);
 #[archive(compare(PartialEq, PartialOrd))]
 #[serde(transparent)]
 pub struct LongInterval {
-    days: i32,
+    months: i32,
 }
 
 impl LongInterval {
-    pub const fn new(days: i32) -> Self {
-        Self { days }
+    pub const fn new(months: i32) -> Self {
+        Self { months }
     }
 
-    pub fn days(&self) -> i32 {
-        self.days
+    pub fn months(&self) -> i32 {
+        self.months
+    }
+}
+
+impl ToWindowBound<u64> for LongInterval {
+    // TODO: this is not correct.  This expresses the interval in
+    // days.
+    fn to_bound(&self) -> u64 {
+        (self.months * 30) as u64
     }
 }
 
@@ -120,7 +148,7 @@ where
 
     fn mul(self, rhs: T) -> Self {
         Self {
-            days: self.days * rhs,
+            months: self.months * rhs,
         }
     }
 }
@@ -128,10 +156,11 @@ where
 impl<T> From<T> for LongInterval
 where
     i32: From<T>,
+    T: PrimInt,
 {
     fn from(value: T) -> Self {
         Self {
-            days: i32::from(value),
+            months: i32::from(value),
         }
     }
 }

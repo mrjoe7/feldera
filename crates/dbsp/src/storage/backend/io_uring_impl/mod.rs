@@ -6,9 +6,8 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Error as IoError, ErrorKind};
 use std::mem::ManuallyDrop;
-use std::os::fd::AsRawFd;
+use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,37 +15,29 @@ use io_uring::squeue::Entry;
 use io_uring::{opcode, types::Fd, IoUring};
 use libc::{c_void, iovec};
 use metrics::{counter, histogram};
+use pipeline_types::config::StorageCacheConfig;
 
 use crate::storage::backend::{
     metrics::{
         FILES_CREATED, FILES_DELETED, READS_FAILED, READS_SUCCESS, READ_LATENCY, TOTAL_BYTES_READ,
         TOTAL_BYTES_WRITTEN, WRITES_SUCCESS, WRITE_LATENCY,
     },
-    AtomicIncrementOnlyI64, FileHandle, ImmutableFileHandle, Storage, NEXT_FILE_HANDLE,
+    AtomicIncrementOnlyI64, FileHandle, ImmutableFile, ImmutableFileHandle, ImmutableFiles,
+    Storage, IMMUTABLE_FILE_METADATA, NEXT_FILE_HANDLE,
 };
 use crate::storage::buffer_cache::FBuf;
 use crate::storage::init;
 
 use super::metrics::describe_disk_metrics;
-use super::StorageError;
+use super::{StorageCacheFlags, StorageError};
 
 #[cfg(test)]
 mod tests;
 
-/// Helper function that opens files as direct IO files on linux.
-fn open_as_direct<P: AsRef<Path>>(p: P, options: &mut OpenOptions) -> Result<File, IoError> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_DIRECT);
-    }
-    options.open(p)
-}
-
 /// Meta-data we keep per file we created.
 struct FileMetaData {
     /// The file.
-    file: Rc<File>,
+    file: Arc<File>,
 
     /// File name.
     path: PathBuf,
@@ -81,9 +72,9 @@ impl FileMetaData {
 #[derive(Default)]
 struct VectoredWrite {
     /// Buffers accumulated to write so far.
-    buffers: Vec<Rc<FBuf>>,
+    buffers: Vec<Arc<FBuf>>,
 
-    /// Starting offset for the write.  If there are no buffers yet, this is not
+    /// Starting offset for the write. If there are no buffers yet, this is not
     /// meaningful (and should be 0).
     offset: u64,
 
@@ -95,7 +86,7 @@ impl VectoredWrite {
     /// Tries to add a write of `block` at `offset` to this vectored write.
     /// This will fail if adding `block` would make the vectored write too big
     /// or non-sequential.
-    fn append(&mut self, block: &Rc<FBuf>, offset: u64) -> Result<(), ()> {
+    fn append(&mut self, block: &Arc<FBuf>, offset: u64) -> Result<(), ()> {
         if self.len >= 1024 * 1024 || (self.len > 0 && self.offset + self.len != offset) {
             Err(())
         } else {
@@ -118,7 +109,7 @@ impl VectoredWrite {
 #[allow(dead_code)]
 struct RequestResources {
     /// Needs to be kept until request completion.
-    buffers: Vec<Rc<FBuf>>,
+    buffers: Vec<Arc<FBuf>>,
 
     /// Needs to be kept until request completion.  (The kernel does not copy
     /// out the iovec at submission time, it accesses it throughout request
@@ -130,7 +121,7 @@ struct RequestResources {
 
     /// Needs to be kept until request submission (but it's easier to just keep
     /// it until completion).
-    file: Rc<File>,
+    file: Arc<File>,
 }
 
 /// A "write" or "fsync" request passed to the kernel via `io_uring`.
@@ -170,11 +161,14 @@ struct Inner {
     /// Kernel `io_uring` structure.
     io_uring: IoUring,
 
-    /// All files we created so far.
+    /// All files we can read from.
+    immutable_files: Arc<ImmutableFiles>,
+
+    /// Files we're currently writing to on this thread.
     files: HashMap<i64, FileMetaData>,
 
     /// All requests that have been submitted to `io_uring` and not yet
-    /// completed..
+    /// completed.
     requests: HashMap<u64, Request>,
 
     /// Next request ID to use.
@@ -189,7 +183,10 @@ struct Inner {
 }
 
 impl Inner {
-    fn new(next_file_id: Arc<AtomicIncrementOnlyI64>) -> Result<Self, IoError> {
+    fn new(
+        next_file_id: Arc<AtomicIncrementOnlyI64>,
+        immutable_files: Arc<ImmutableFiles>,
+    ) -> Result<Self, IoError> {
         // Create our io_uring.
         //
         // We specify a submission queue size of 1 because the kernel sizes the
@@ -208,6 +205,7 @@ impl Inner {
 
         Ok(Self {
             io_uring,
+            immutable_files,
             files: HashMap::new(),
             requests: HashMap::new(),
             next_request_id: 0,
@@ -349,17 +347,23 @@ impl Inner {
         }
     }
 
-    fn create_named(&mut self, path: PathBuf) -> Result<FileHandle, StorageError> {
-        let file = open_as_direct(
-            &path,
-            OpenOptions::new().create_new(true).write(true).read(true),
-        )?;
+    fn create_named(
+        &mut self,
+        path: PathBuf,
+        cache: StorageCacheConfig,
+    ) -> Result<FileHandle, StorageError> {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .read(true)
+            .cache_flags(&cache)
+            .open(&path)?;
 
         let file_counter = self.next_file_id.increment();
         self.files.insert(
             file_counter,
             FileMetaData {
-                file: Rc::new(file),
+                file: Arc::new(file),
                 path,
                 size: 0,
                 queued_work: 0,
@@ -372,15 +376,35 @@ impl Inner {
         Ok(FileHandle(file_counter))
     }
 
+    fn open(
+        &mut self,
+        path: PathBuf,
+        cache: StorageCacheConfig,
+    ) -> Result<ImmutableFileHandle, StorageError> {
+        let attr = std::fs::metadata(&path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .cache_flags(&cache)
+            .open(&path)?;
+
+        let file_counter = self.next_file_id.increment();
+
+        let file = Arc::new(file);
+        let imf = ImmutableFile::new(file, path, attr.size());
+        self.immutable_files.insert(file_counter, imf);
+
+        Ok(ImmutableFileHandle(file_counter))
+    }
+
     fn write_block(
         &mut self,
         fd: &FileHandle,
         offset: u64,
-        block: Rc<FBuf>,
-    ) -> Result<Rc<FBuf>, StorageError> {
+        block: Arc<FBuf>,
+    ) -> Result<Arc<FBuf>, StorageError> {
         let end_offset = offset + block.len() as u64;
 
-        let fm = self.files.get_mut(&fd.0).unwrap();
+        let fm = self.files.get_mut(&fd.0).expect("File state for writing should exist. Accidentally shared a mutable file across threads?");
         fm.error()?;
         fm.size = fm.size.max(end_offset);
 
@@ -412,13 +436,14 @@ impl Inner {
         let fm = self.files.get(&fd).unwrap();
         let file = fm.file.clone();
         let path = fm.path.clone();
+        let size = fm.size;
 
         // Submit an `fsync` request for the file.  We don't wait for it to
-        // complete.  This ensures that the metadata (and data, but we used
-        // O_DIRECT) for the file will be committed "soon".  It also ensures
-        // that we can make sure that everything we've written is on stable
-        // storage for the purpose of a checkpoint (which we don't do yet)
-        // simply by waiting for the entire io_uring to drain.
+        // complete.  This ensures that the metadata (and data, but we probably
+        // used `O_DIRECT`) for the file will be committed "soon".  It also
+        // ensures that we can make sure that everything we've written is on
+        // stable storage for the purpose of a checkpoint (which we don't do
+        // yet) simply by waiting for the entire io_uring to drain.
         self.submit_request(
             fd,
             opcode::Fsync::new(Fd(file.as_raw_fd())).build(),
@@ -427,9 +452,12 @@ impl Inner {
             RequestResources {
                 iovec: Vec::new(),
                 buffers: Vec::new(),
-                file,
+                file: file.clone(),
             },
         )?;
+
+        let imf = ImmutableFile::new(file, path.clone(), size);
+        self.immutable_files.insert(fd, imf);
 
         Ok((ImmutableFileHandle(fd), path))
     }
@@ -442,21 +470,17 @@ impl Inner {
         retval
     }
 
-    fn read_block(&self, fd: i64, offset: u64, size: usize) -> Result<Rc<FBuf>, StorageError> {
+    fn read_block(&self, fd: i64, offset: u64, size: usize) -> Result<Arc<FBuf>, StorageError> {
         let mut buffer = FBuf::with_capacity(size);
 
-        let fm = self.files.get(&fd).unwrap();
-
+        let fm = self.immutable_files.get(fd).unwrap();
         let request_start = Instant::now();
-        match fm
-            .error()
-            .and_then(|_| buffer.read_exact_at(&fm.file, offset, size))
-        {
+        match buffer.read_exact_at(&fm.file, offset, size) {
             Ok(()) => {
                 counter!(TOTAL_BYTES_READ).increment(buffer.len() as u64);
                 histogram!(READ_LATENCY).record(request_start.elapsed().as_secs_f64());
                 counter!(READS_SUCCESS).increment(1);
-                Ok(Rc::new(buffer))
+                Ok(Arc::new(buffer))
             }
             Err(e) => {
                 counter!(READS_FAILED).increment(1);
@@ -489,6 +513,7 @@ impl Inner {
 /// State of the backend needed to satisfy the storage APIs.
 pub struct IoUringBackend {
     inner: RefCell<Inner>,
+    cache: StorageCacheConfig,
     /// Directory in which we keep the files.
     base: PathBuf,
 }
@@ -503,22 +528,29 @@ impl IoUringBackend {
     ///   shared among all instances of the backend.
     pub fn new<P: AsRef<Path>>(
         base: P,
+        cache: StorageCacheConfig,
         next_file_id: Arc<AtomicIncrementOnlyI64>,
+        immutable_files: Arc<ImmutableFiles>,
     ) -> Result<Self, IoError> {
         init();
         describe_disk_metrics();
         Ok(Self {
             base: base.as_ref().to_path_buf(),
-            inner: RefCell::new(Inner::new(next_file_id)?),
+            cache,
+            inner: RefCell::new(Inner::new(next_file_id, immutable_files)?),
         })
     }
 
     /// See [`IoUringBackend::new`]. This function is a convenience function
     /// that creates a new backend with global unique file-handle counter.
-    pub fn with_base<P: AsRef<Path>>(base: P) -> Result<Self, IoError> {
+    pub fn with_base<P: AsRef<Path>>(base: P, cache: StorageCacheConfig) -> Result<Self, IoError> {
         Self::new(
             base,
+            cache,
             NEXT_FILE_HANDLE
+                .get_or_init(|| Arc::new(Default::default()))
+                .clone(),
+            IMMUTABLE_FILE_METADATA
                 .get_or_init(|| Arc::new(Default::default()))
                 .clone(),
         )
@@ -537,7 +569,15 @@ impl IoUringBackend {
 
 impl Storage for IoUringBackend {
     fn create_named(&self, name: &Path) -> Result<FileHandle, StorageError> {
-        self.inner.borrow_mut().create_named(self.base.join(name))
+        self.inner
+            .borrow_mut()
+            .create_named(self.base.join(name), self.cache)
+    }
+
+    fn open(&self, name: &Path) -> Result<ImmutableFileHandle, StorageError> {
+        self.inner
+            .borrow_mut()
+            .open(self.base.join(name), self.cache)
     }
 
     fn delete(&self, fd: ImmutableFileHandle) -> Result<(), StorageError> {
@@ -553,10 +593,10 @@ impl Storage for IoUringBackend {
         fd: &FileHandle,
         offset: u64,
         data: FBuf,
-    ) -> Result<Rc<FBuf>, StorageError> {
+    ) -> Result<Arc<FBuf>, StorageError> {
         self.inner
             .borrow_mut()
-            .write_block(fd, offset, Rc::new(data))
+            .write_block(fd, offset, Arc::new(data))
     }
 
     fn complete(&self, fd: FileHandle) -> Result<(ImmutableFileHandle, PathBuf), StorageError> {
@@ -572,11 +612,15 @@ impl Storage for IoUringBackend {
         fd: &ImmutableFileHandle,
         offset: u64,
         size: usize,
-    ) -> Result<Rc<FBuf>, StorageError> {
+    ) -> Result<Arc<FBuf>, StorageError> {
         self.inner.borrow().read_block(fd.0, offset, size)
     }
 
     fn get_size(&self, fd: &ImmutableFileHandle) -> Result<u64, StorageError> {
-        Ok(self.inner.borrow().files.get(&fd.0).unwrap().size)
+        Ok(self.inner.borrow().immutable_files.get(fd.0).unwrap().size)
+    }
+
+    fn base(&self) -> PathBuf {
+        self.base.clone()
     }
 }

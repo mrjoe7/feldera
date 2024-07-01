@@ -1,49 +1,52 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
-import org.dbsp.sqlCompiler.compiler.visitors.inner.monotone.ValueProjection;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.monotone.IMaybeMonotoneType;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.monotone.PartiallyMonotoneTuple;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.DBSPParameter;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPVariablePath;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
 
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 
-public class DBSPIntegrateTraceRetainKeysOperator extends DBSPOperator {
+public final class DBSPIntegrateTraceRetainKeysOperator extends DBSPBinaryOperator {
     public DBSPIntegrateTraceRetainKeysOperator(
             CalciteObject node, DBSPExpression expression,
             DBSPOperator data, DBSPOperator control) {
-        super(node, "integrate_trace_retain_keys", expression, data.getType(), data.isMultiset);
-        this.addInput(data);
-        this.addInput(control);
+        super(node, "integrate_trace_retain_keys", expression, data.getType(), data.isMultiset, data, control);
     }
 
     public static DBSPIntegrateTraceRetainKeysOperator create(
-            CalciteObject node, DBSPOperator data, ValueProjection dataProjection, DBSPOperator control) {
+            CalciteObject node, DBSPOperator data, IMaybeMonotoneType dataProjection, DBSPOperator control) {
         DBSPType controlType = control.getType();
-        DBSPType leftSliceType = dataProjection.getProjectionResultType();
+        DBSPType leftSliceType = Objects.requireNonNull(dataProjection.getProjectedType());
         assert leftSliceType.sameType(controlType):
                 "Projection type does not match control type " + leftSliceType + "/" + controlType;
 
         DBSPParameter param;
         DBSPExpression compare;
-        DBSPVariablePath controlArg = new DBSPVariablePath("c", controlType.ref());
+        DBSPVariablePath controlArg = new DBSPVariablePath(controlType.ref());
         if (data.outputType.is(DBSPTypeIndexedZSet.class)) {
             DBSPType keyType = data.getOutputIndexedZSetType().keyType;
-            DBSPVariablePath dataArg = new DBSPVariablePath("d", keyType);
+            DBSPVariablePath dataArg = new DBSPVariablePath(keyType);
             param = new DBSPParameter(dataArg.variable, dataArg.getType().ref());
+            DBSPExpression project = dataProjection
+                    .to(PartiallyMonotoneTuple.class)
+                    .getField(0)
+                    .projectExpression(dataArg);
             compare = DBSPControlledFilterOperator.generateTupleCompare(
-                    dataArg, controlArg.deref().field(0));
+                    project, controlArg.deref().field(0));
         } else {
             DBSPType keyType = data.getOutputZSetElementType();
-            DBSPVariablePath dataArg = new DBSPVariablePath("d", keyType);
+            DBSPVariablePath dataArg = new DBSPVariablePath(keyType);
             param = new DBSPParameter(dataArg.variable, dataArg.getType().ref());
-            DBSPExpression project = dataProjection.project(dataArg);
+            DBSPExpression project = dataProjection.projectExpression(dataArg);
             compare = DBSPControlledFilterOperator.generateTupleCompare(
                     project, controlArg.deref());
         }
@@ -55,7 +58,7 @@ public class DBSPIntegrateTraceRetainKeysOperator extends DBSPOperator {
     public DBSPOperator withFunction(@Nullable DBSPExpression expression, DBSPType outputType) {
         return new DBSPIntegrateTraceRetainKeysOperator(
                 this.getNode(), Objects.requireNonNull(expression),
-                this.inputs.get(0), this.inputs.get(1));
+                this.left(), this.right());
     }
 
     @Override

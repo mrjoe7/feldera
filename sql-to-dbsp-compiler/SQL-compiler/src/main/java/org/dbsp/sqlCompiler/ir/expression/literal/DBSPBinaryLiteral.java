@@ -23,7 +23,7 @@
 
 package org.dbsp.sqlCompiler.ir.expression.literal;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -36,7 +36,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /** A byte array literal */
-public class DBSPBinaryLiteral extends DBSPLiteral {
+public final class DBSPBinaryLiteral extends DBSPLiteral {
     @Nullable
     public final byte[] value;
 

@@ -26,7 +26,7 @@
 package org.dbsp.sqlCompiler.compiler.sql.simple;
 
 import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.sql.BaseSQLTests;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
@@ -57,17 +57,16 @@ import java.math.BigDecimal;
  * Test end-to-end by compiling some DDL statements and view
  * queries by compiling them to rust and executing them
  * by inserting data in the input tables and reading data
- * from the declared views.
- */
+ * from the declared views. */
 public class EndToEndTests extends BaseSQLTests {
-    static final String E2E_TABLE = "CREATE TABLE T (\n" +
-            "COL1 INT NOT NULL" +
-            ", COL2 DOUBLE NOT NULL" +
-            ", COL3 BOOLEAN NOT NULL" +
-            ", COL4 VARCHAR NOT NULL" +
-            ", COL5 INT" +
-            ", COL6 DOUBLE" +
-            ")";
+    public static final String E2E_TABLE = """
+            CREATE TABLE T (
+            COL1 INT NOT NULL
+            , COL2 DOUBLE PRECISION NOT NULL
+            , COL3 BOOLEAN NOT NULL
+            , COL4 VARCHAR NOT NULL
+            , COL5 INT
+            , COL6 DOUBLE PRECISION)""";
 
     public DBSPCompiler compileQuery(String query) {
         DBSPCompiler compiler = this.testCompiler();
@@ -102,11 +101,11 @@ public class EndToEndTests extends BaseSQLTests {
     /**
      * Returns the table T containing:
      * -------------------------------------------
-     * | 10 | 12.0 | true  | Hi | NULL    | NULL |
-     * | 10 |  1.0 | false | Hi | Some[1] |  0.0 |
+     * | 10 | 12e0 | true  | Hi | NULL    | NULL |
+     * | 10 |  1e0 | false | Hi | Some[1] |  0e0 |
      * -------------------------------------------
-     * INSERT INTO T VALUES (10, 12, true, 'Hi', NULL, NULL);
-     * INSERT INTO T VALUES (10, 1.0, false, 'Hi', 1, 0.0);
+     INSERT INTO T VALUES (10, 12e0, true, 'Hi', NULL, NULL);
+     INSERT INTO T VALUES (10, 1e0, false, 'Hi', 1, 0e0);
      */
     static Change createInput() {
         return new Change(new DBSPZSetLiteral(e0, e1));
@@ -220,16 +219,29 @@ public class EndToEndTests extends BaseSQLTests {
 
     @Test
     public void overTest() {
-        DBSPExpression t = new DBSPTupleExpression(new DBSPI32Literal(10), new DBSPI64Literal(2));
         String query = "SELECT T.COL1, COUNT(*) OVER (ORDER BY T.COL1 RANGE UNBOUNDED PRECEDING) FROM T";
+        DBSPExpression t = new DBSPTupleExpression(new DBSPI32Literal(10), new DBSPI64Literal(2));
         this.testQuery(query, new DBSPZSetLiteral(t, t));
     }
 
     @Test
     public void overSumTest() {
-        DBSPExpression t = new DBSPTupleExpression(new DBSPI32Literal(10), new DBSPDoubleLiteral(13.0));
         String query = "SELECT T.COL1, SUM(T.COL2) OVER (ORDER BY T.COL1 RANGE UNBOUNDED PRECEDING) FROM T";
+        DBSPExpression t = new DBSPTupleExpression(new DBSPI32Literal(10), new DBSPDoubleLiteral(13.0));
         this.testQuery(query, new DBSPZSetLiteral(t, t));
+    }
+
+    @Test
+    public void lagTest() {
+        String query = "SELECT T.COL1, LAG(T.COL1) OVER (ORDER BY T.COL1) FROM T";
+        this.testQuery(query, new DBSPZSetLiteral(
+                new DBSPTupleExpression(
+                        new DBSPI32Literal(10),
+                        DBSPLiteral.none(new DBSPTypeInteger(
+                                CalciteObject.EMPTY, 32, true, true))),
+                new DBSPTupleExpression(
+                        new DBSPI32Literal(10),
+                        new DBSPI32Literal(10, true))));
     }
 
     @Test
@@ -249,7 +261,7 @@ public class EndToEndTests extends BaseSQLTests {
     @Test
     public void testArray() {
         String query = "SELECT ELEMENT(ARRAY [2])";
-        DBSPZSetLiteral result = new DBSPZSetLiteral(new DBSPTupleExpression(new DBSPI32Literal(2)));
+        DBSPZSetLiteral result = new DBSPZSetLiteral(new DBSPTupleExpression(new DBSPI32Literal(2, true)));
         this.testConstantOutput(query, result);
     }
 
@@ -296,9 +308,10 @@ public class EndToEndTests extends BaseSQLTests {
                 new DBSPI32Literal(10),
                 new DBSPDoubleLiteral(13.0),
                 new DBSPI64Literal(2));
-        String query = "SELECT T.COL1, " +
-                "SUM(T.COL2) OVER (ORDER BY T.COL1 RANGE UNBOUNDED PRECEDING), " +
-                "COUNT(*) OVER (ORDER BY T.COL1 RANGE UNBOUNDED PRECEDING) FROM T";
+        String query = """
+                SELECT T.COL1,
+                SUM(T.COL2) OVER (ORDER BY T.COL1 RANGE UNBOUNDED PRECEDING),
+                COUNT(*) OVER (ORDER BY T.COL1 RANGE UNBOUNDED PRECEDING) FROM T""";
         this.testQuery(query, new DBSPZSetLiteral(t, t));
     }
 
@@ -306,7 +319,7 @@ public class EndToEndTests extends BaseSQLTests {
     public void overConstantWindowTest() {
         DBSPExpression t = new DBSPTupleExpression(
                 new DBSPI32Literal(10),
-                new DBSPI64Literal(2));
+                new DBSPI64Literal(0));
         String query = "SELECT T.COL1, " +
                 "COUNT(*) OVER (ORDER BY T.COL1 RANGE BETWEEN 2 PRECEDING AND 1 PRECEDING) FROM T";
         this.testQuery(query, new DBSPZSetLiteral(t, t));
@@ -317,10 +330,11 @@ public class EndToEndTests extends BaseSQLTests {
         DBSPExpression t = new DBSPTupleExpression(
                 new DBSPI32Literal(10),
                 new DBSPDoubleLiteral(13.0),
-                new DBSPI64Literal(2));
-        String query = "SELECT T.COL1, " +
-                "SUM(T.COL2) OVER (ORDER BY T.COL1 RANGE UNBOUNDED PRECEDING), " +
-                "COUNT(*) OVER (ORDER BY T.COL1 RANGE BETWEEN 2 PRECEDING AND 1 PRECEDING) FROM T";
+                new DBSPI64Literal(0));
+        String query = """
+                SELECT T.COL1,
+                SUM(T.COL2) OVER (ORDER BY T.COL1 RANGE UNBOUNDED PRECEDING),
+                COUNT(*) OVER (ORDER BY T.COL1 RANGE BETWEEN 2 PRECEDING AND 1 PRECEDING) FROM T""";
         this.testQuery(query, new DBSPZSetLiteral(t, t));
     }
 
@@ -404,10 +418,10 @@ public class EndToEndTests extends BaseSQLTests {
         this.testQuery(query, new DBSPZSetLiteral(
                 new DBSPTupleExpression(
                         new DBSPBoolLiteral(true),
-                        DBSPLiteral.none(new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,false))
+                        DBSPLiteral.none(new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,true))
                 ),
                 new DBSPTupleExpression(new DBSPBoolLiteral(false),
-                        DBSPLiteral.none(new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,false))
+                        DBSPLiteral.none(new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,true))
                 )));
     }
 
@@ -436,11 +450,11 @@ public class EndToEndTests extends BaseSQLTests {
                 new DBSPTupleExpression(
                         new DBSPBoolLiteral(true),
                         new DBSPI64Literal(0, false),
-                        DBSPLiteral.none(new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,false))
+                        DBSPLiteral.none(new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,true))
                 ),
                 new DBSPTupleExpression(new DBSPBoolLiteral(false),
                         new DBSPI64Literal(0, false),
-                        DBSPLiteral.none(new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,false))
+                        DBSPLiteral.none(new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,true))
                 )));
     }
 
@@ -700,6 +714,13 @@ public class EndToEndTests extends BaseSQLTests {
     }
 
     @Test
+    public void divTest2() {
+        String query = "SELECT 5 / COUNT(*) - COUNT(*) FROM T";
+        this.testQuery(query, new DBSPZSetLiteral(
+                new DBSPTupleExpression(new DBSPI64Literal(0))));
+    }
+
+    @Test
     public void divZeroTest() {
         String query = "SELECT 1 / 0";
         this.runtimeConstantFail(query, "attempt to divide by zero");
@@ -708,7 +729,7 @@ public class EndToEndTests extends BaseSQLTests {
     @Test
     public void divZero0() {
         String query = "SELECT 'Infinity' / 0";
-        this.runtimeConstantFail(query, "InvalidDigit");
+        this.runtimeConstantFail(query, "Could not parse");
     }
 
     @Test
@@ -825,6 +846,14 @@ public class EndToEndTests extends BaseSQLTests {
                 new DBSPZSetLiteral(
                         new DBSPTupleExpression(DBSPLiteral.none(
                                 new DBSPTypeInteger(CalciteObject.EMPTY, 32, true,true)))));
+    }
+
+    @Test
+    public void emptyAggregate() {
+        String query = "SELECT COUNT(*), COUNT(DISTINCT COL1) FROM T WHERE COL1 > 10000";
+        this.testConstantOutput(query, new DBSPZSetLiteral(
+                new DBSPTupleExpression(
+                        new DBSPI64Literal(0), new DBSPI64Literal(0))));
     }
 
     @Test

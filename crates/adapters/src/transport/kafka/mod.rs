@@ -1,5 +1,7 @@
 use anyhow::Error as AnyError;
-use pipeline_types::transport::kafka::KafkaLogLevel;
+use parquet::data_type::AsBytes;
+use pipeline_types::transport::kafka::{KafkaHeader, KafkaLogLevel};
+use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::{
     client::{Client as KafkaClient, ClientContext},
     config::RDKafkaLogLevel,
@@ -102,7 +104,7 @@ impl DeferredLogging {
         *self.0.lock().unwrap() = Some(Vec::new());
         let r = f();
         for (level, fac, message) in self.0.lock().unwrap().take().unwrap().drain(..) {
-            log::info!("{level:?} {fac} {message}");
+            tracing::info!("{level:?} {fac} {message}");
         }
         r
     }
@@ -149,20 +151,33 @@ impl DeferredLogging {
             | RDKafkaLogLevel::Alert
             | RDKafkaLogLevel::Critical
             | RDKafkaLogLevel::Error => {
-                log::error!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
+                tracing::error!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
             }
             RDKafkaLogLevel::Warning => {
-                log::warn!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
+                tracing::warn!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
             }
             RDKafkaLogLevel::Notice => {
-                log::info!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
+                tracing::info!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
             }
             RDKafkaLogLevel::Info => {
-                log::info!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
+                tracing::info!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
             }
             RDKafkaLogLevel::Debug => {
-                log::debug!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
+                tracing::debug!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
             }
         }
     }
+}
+
+pub fn build_headers(headers: &Vec<KafkaHeader>) -> OwnedHeaders {
+    let mut result = OwnedHeaders::new_with_capacity(headers.len());
+
+    for header in headers {
+        result = result.insert(Header {
+            key: &header.key,
+            value: header.value.as_ref().map(|val| val.0.as_bytes()),
+        });
+    }
+
+    result
 }

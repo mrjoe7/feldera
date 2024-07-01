@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
 use aws_sdk_s3::operation::{get_object::GetObjectOutput, list_objects_v2::ListObjectsV2Error};
-use log::error;
 use tokio::sync::{
     mpsc,
     watch::{channel, Receiver, Sender},
 };
+use tracing::error;
 
-use crate::{InputConsumer, InputEndpoint, InputReader, PipelineState};
+use crate::{InputConsumer, InputReader, PipelineState, TransportInputEndpoint};
 #[cfg(test)]
 use mockall::automock;
 
+use crate::transport::InputEndpoint;
 use pipeline_types::transport::s3::{AwsCredentials, ConsumeStrategy, ReadStrategy, S3InputConfig};
 
 pub struct S3InputEndpoint {
@@ -29,7 +30,9 @@ impl InputEndpoint for S3InputEndpoint {
     fn is_fault_tolerant(&self) -> bool {
         false
     }
+}
 
+impl TransportInputEndpoint for S3InputEndpoint {
     fn open(
         &self,
         consumer: Box<dyn crate::InputConsumer>,
@@ -366,9 +369,10 @@ format:
                 panic!("Expected S3Input transport configuration");
             }
         };
-        let (consumer, input_handle) =
-            mock_parser_pipeline::<TestStruct, TestStruct>(&config.connector_config.format)
-                .unwrap();
+        let (consumer, input_handle) = mock_parser_pipeline::<TestStruct, TestStruct>(
+            &config.connector_config.format.unwrap(),
+        )
+        .unwrap();
         consumer.on_error(Some(Box::new(|_, _| ())));
         let reader = Box::new(S3InputReader::new_inner(
             &transport_config,
@@ -390,7 +394,8 @@ format:
         wait(
             || input_handle.state().flushed.len() == test_data.len(),
             1000,
-        );
+        )
+        .unwrap();
 
         assert_eq!(test_data.len(), input_handle.state().flushed.len());
         for (i, upd) in input_handle.state().flushed.iter().enumerate() {
@@ -484,7 +489,7 @@ format:
         let (reader, _, input_handle) = test_setup(MULTI_KEY_CONFIG_STR, mock);
         reader.start(0).unwrap();
         // Pause after 50 rows are recorded.
-        wait(|| input_handle.state().flushed.len() > 50, 1000);
+        wait(|| input_handle.state().flushed.len() > 50, 1000).unwrap();
         let _ = reader.pause();
         // Wait a few milliseconds for the worker to pause and write any WIP object
         std::thread::sleep(Duration::from_millis(10));
@@ -498,7 +503,8 @@ format:
         wait(
             || input_handle.state().flushed.len() == test_data.len(),
             10000,
-        );
+        )
+        .unwrap();
 
         assert_eq!(test_data.len(), input_handle.state().flushed.len());
         for (i, upd) in input_handle.state().flushed.iter().enumerate() {

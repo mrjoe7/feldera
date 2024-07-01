@@ -62,13 +62,11 @@
 
 #![allow(clippy::type_complexity)]
 
-extern crate core;
-
 pub mod dynamic;
 mod error;
 mod hash;
 mod num_entries;
-mod ref_pair;
+//mod ref_pair;
 
 pub mod typed_batch;
 
@@ -104,8 +102,9 @@ pub use operator::{
 };
 pub use trace::{DBData, DBWeight};
 pub use typed_batch::{
-    Batch, BatchReader, FileIndexedWSet, FileIndexedZSet, FileKeyBatch, FileValBatch, FileWSet,
-    FileZSet, IndexedZSet, OrdIndexedWSet, OrdIndexedZSet, OrdWSet, OrdZSet, Trace, TypedBox, ZSet,
+    Batch, BatchReader, FallbackKeyBatch, FallbackValBatch, FallbackWSet, FallbackZSet,
+    FileIndexedWSet, FileIndexedZSet, FileKeyBatch, FileValBatch, FileWSet, FileZSet, IndexedZSet,
+    OrdIndexedWSet, OrdIndexedZSet, OrdWSet, OrdZSet, Trace, TypedBox, ZSet,
 };
 
 #[cfg(doc)]

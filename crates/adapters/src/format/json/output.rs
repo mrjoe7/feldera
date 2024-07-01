@@ -72,7 +72,7 @@ impl OutputFormat for JsonOutputFormat {
             config.buffer_size_records = 1;
         }
 
-        Ok(Box::new(JsonEncoder::new(consumer, config, schema)?))
+        Ok(Box::new(JsonEncoder::new(consumer, config, schema)))
     }
 }
 
@@ -115,7 +115,7 @@ impl JsonEncoder {
         output_consumer: Box<dyn OutputConsumer>,
         mut config: JsonEncoderConfig,
         schema: &Relation,
-    ) -> Result<Self, ControllerError> {
+    ) -> Self {
         let max_buffer_size = output_consumer.max_buffer_size_bytes();
 
         if config.json_flavor.is_none() {
@@ -126,10 +126,10 @@ impl JsonEncoder {
             });
         }
 
-        let value_schema_str = build_value_schema(&config, schema)?;
-        let key_schema_str = build_key_schema(&config, schema)?;
+        let value_schema_str = build_value_schema(&config, schema);
+        let key_schema_str = build_key_schema(&config, schema);
 
-        Ok(Self {
+        Self {
             output_consumer,
             config,
             value_schema_str,
@@ -141,7 +141,7 @@ impl JsonEncoder {
             // id into a negative number.
             stream_id: StdRng::from_entropy().gen_range(0..i64::MAX) as u64,
             seq_number: 0,
-        })
+        }
     }
 }
 
@@ -383,16 +383,15 @@ mod test {
             Encoder,
         },
         static_compile::seroutput::SerBatchImpl,
-        test::{
-            generate_test_batches_with_weights, test_struct_schema, MockOutputConsumer, TestStruct,
-        },
+        test::{generate_test_batches_with_weights, MockOutputConsumer, TestStruct},
     };
     use dbsp::{utils::Tup2, OrdZSet};
-    use log::trace;
     use pipeline_types::format::json::JsonUpdateFormat;
+    use pipeline_types::program_schema::Relation;
     use proptest::prelude::*;
     use serde::Deserialize;
     use std::{cell::RefCell, fmt::Debug, rc::Rc, sync::Arc};
+    use tracing::trace;
 
     trait OutputUpdate: Debug + for<'de> Deserialize<'de> + Eq + Ord {
         type Val;
@@ -492,8 +491,11 @@ mod test {
 
         let consumer = MockOutputConsumer::new();
         let consumer_data = consumer.data.clone();
-        let mut encoder =
-            JsonEncoder::new(Box::new(consumer), config, &test_struct_schema()).unwrap();
+        let mut encoder = JsonEncoder::new(
+            Box::new(consumer),
+            config,
+            &Relation::new("TestStruct", false, TestStruct::schema(), false),
+        );
         let zsets = batches
             .iter()
             .map(|batch| {
@@ -507,8 +509,10 @@ mod test {
                 Arc::new(<SerBatchImpl<_, TestStruct, ()>>::new(zset)) as Arc<dyn SerBatch>
             })
             .collect::<Vec<_>>();
-        for zset in zsets {
+        for (step, zset) in zsets.iter().enumerate() {
+            encoder.consumer().batch_start(step as u64);
             encoder.encode(zset.as_batch_reader()).unwrap();
+            encoder.consumer().batch_end();
         }
 
         let seq_number = Rc::new(RefCell::new(0));
@@ -568,10 +572,10 @@ mod test {
 
         trace!(
             "output: {}",
-            std::str::from_utf8(&consumer_data.lock().unwrap()).unwrap()
+            std::str::from_utf8(&consumer_data.lock().unwrap().concat()).unwrap()
         );
 
-        let consumer_data = consumer_data.lock().unwrap();
+        let consumer_data = consumer_data.lock().unwrap().concat();
         let deserializer = serde_json::Deserializer::from_slice(&consumer_data);
 
         let actual_output = if array {
@@ -664,8 +668,11 @@ mod test {
         };
 
         let consumer = MockOutputConsumer::with_max_buffer_size_bytes(32);
-        let mut encoder =
-            JsonEncoder::new(Box::new(consumer), config, &test_struct_schema()).unwrap();
+        let mut encoder = JsonEncoder::new(
+            Box::new(consumer),
+            config,
+            &Relation::new("TestStruct", false, TestStruct::schema(), false),
+        );
         let zset = OrdZSet::from_keys((), test_data()[0].clone());
 
         let err = encoder

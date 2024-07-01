@@ -1,3 +1,5 @@
+pub mod delta_table;
+pub mod error;
 pub mod file;
 pub mod http;
 pub mod kafka;

@@ -3,18 +3,15 @@
 
 import { TabFooter } from '$lib/components/connectors/dialogs/tabs/TabFooter'
 import { TabLabel } from '$lib/components/connectors/dialogs/tabs/TabLabel'
-import { connectorTransportName, parseUrlSchema } from '$lib/functions/connectors'
+import { parseUrlSchema } from '$lib/functions/connectors'
 import { PLACEHOLDER_VALUES } from '$lib/functions/placeholders'
 import { useConnectorRequest } from '$lib/services/connectors/dialogs/SubmitHandler'
-import { ConnectorType } from '$lib/types/connectors'
+import { TransportConfig } from '$lib/services/manager'
 import { ConnectorDialogProps } from '$lib/types/connectors/ConnectorDialogProps'
 import { useEffect, useState } from 'react'
 import { FieldErrors } from 'react-hook-form'
 import { FormContainer, TextFieldElement } from 'react-hook-form-mui'
 import * as va from 'valibot'
-import IconCategoryAlt from '~icons/bx/category-alt'
-import IconFile from '~icons/bx/file'
-import IconX from '~icons/bx/x'
 
 import { valibotResolver } from '@hookform/resolvers/valibot'
 import TabContext from '@mui/lab/TabContext'
@@ -28,8 +25,9 @@ import IconButton from '@mui/material/IconButton'
 import Tab from '@mui/material/Tab'
 import Typography from '@mui/material/Typography'
 
-import { TabGenericInputFormatDetails } from './tabs/TabGenericInputFormatDetails'
+import { TabGenericInputFormatDetails } from './tabs/generic/TabGenericInputFormatDetails'
 import Transition from './tabs/Transition'
+import JSONbig from 'true-json-bigint'
 
 const schema = va.object({
   name: va.nonOptional(va.string([va.minLength(1, 'Specify connector name')])),
@@ -85,7 +83,7 @@ export const UrlConnectorDialog = (props: ConnectorDialogProps) => {
 
   const normalizeConfig = (data: { transport: UrlSchema['transport']; format: UrlSchema['format'] }) => ({
     transport: {
-      name: connectorTransportName(ConnectorType.URL),
+      name: TransportConfig.name.URL_INPUT,
       config: {
         path: data.transport.url
       }
@@ -105,7 +103,8 @@ export const UrlConnectorDialog = (props: ConnectorDialogProps) => {
   const onSubmit = useConnectorRequest(props.connector, prepareData, props.onSuccess, handleClose)
 
   // If there is an error, switch to the earliest tab with an error
-  const handleErrors = ({ name, description, transport, format }: FieldErrors<UrlSchema>) => {
+  const handleErrors = (errors: FieldErrors<UrlSchema>) => {
+    const { name, description, transport, format } = errors
     if (!props.show) {
       return
     }
@@ -113,6 +112,8 @@ export const UrlConnectorDialog = (props: ConnectorDialogProps) => {
       setActiveTab('detailsTab')
     } else if (format?.format_name || format?.json_array || format?.update_format) {
       setActiveTab('formatTab')
+    } else {
+      throw new Error(JSONbig.stringify(errors))
     }
   }
   const tabFooter = <TabFooter submitButton={props.submitButton} {...{ activeTab, setActiveTab, tabs }} />
@@ -127,6 +128,7 @@ export const UrlConnectorDialog = (props: ConnectorDialogProps) => {
     >
       <FormContainer
         resolver={valibotResolver(schema)}
+        mode='onChange'
         values={curValues}
         defaultValues={defaultValues}
         onSuccess={onSubmit}
@@ -147,7 +149,7 @@ export const UrlConnectorDialog = (props: ConnectorDialogProps) => {
             sx={{ position: 'absolute', right: '1rem', top: '1rem' }}
             data-testid='button-close-modal'
           >
-            <IconX />
+            <i className={`bx bx-x`} style={{}} />
           </IconButton>
           <Box sx={{ mb: 8, textAlign: 'center' }}>
             <Typography variant='h5' sx={{ mb: 3 }}>
@@ -181,7 +183,7 @@ export const UrlConnectorDialog = (props: ConnectorDialogProps) => {
                       title='Source'
                       subtitle='Description'
                       active={activeTab === 'detailsTab'}
-                      icon={<IconFile />}
+                      icon={<i className={`bx bx-file`} style={{}} />}
                     />
                   }
                   data-testid='button-tab-name'
@@ -194,7 +196,7 @@ export const UrlConnectorDialog = (props: ConnectorDialogProps) => {
                       title='Format'
                       active={activeTab === 'formatTab'}
                       subtitle='Data details'
-                      icon={<IconCategoryAlt />}
+                      icon={<i className={`bx bx-category-alt`} style={{}} />}
                     />
                   }
                   data-testid='button-tab-format'

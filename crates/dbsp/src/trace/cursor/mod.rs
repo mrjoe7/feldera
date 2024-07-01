@@ -7,11 +7,14 @@ pub mod cursor_list;
 pub mod cursor_pair;
 mod reverse;
 
+use std::fmt::Debug;
+
 pub use cursor_empty::CursorEmpty;
 pub use cursor_group::CursorGroup;
 pub use cursor_list::CursorList;
 pub use cursor_pair::CursorPair;
 pub use reverse::ReverseKeyCursor;
+use size_of::SizeOf;
 
 use crate::dynamic::Factory;
 
@@ -71,6 +74,14 @@ enum Direction {
 ///
 /// Every key in a nonempty collection has at least one value.
 ///
+/// # Visiting time-diff pairs within a value
+///
+/// Time-diff pairs are most often visited using [`map_times`] and related
+/// methods, which take a closure that is applied to each of the pairs. For
+/// cases where there is known to be only one pair, [`weight`] is
+/// appropriate. In special cases, the [`TimeDiffCursor`] trait allows iterating
+/// through all of the pairs.
+///
 /// # Example
 ///
 /// The following is typical code for iterating through all of the key-value
@@ -99,6 +110,8 @@ enum Direction {
 /// [`seek_val_reverse`]: `Self::seek_val_reverse`
 /// [`rewind_vals`]: `Self::rewind_vals`
 /// [`fast_forward_vals`]: `Self::fast_forward_vals`
+/// [`map_times`]: Self::map_times
+/// [`weight`]: Self::weight
 pub trait Cursor<K: ?Sized, V: ?Sized, T, R: ?Sized> {
     /*fn key_vtable(&self) -> &'static VTable<K>;
     fn val_vtable(&self) -> &'static VTable<V>;*/
@@ -294,6 +307,236 @@ pub trait Cursor<K: ?Sized, V: ?Sized, T, R: ?Sized> {
                 self.fast_forward_vals();
             }
         }
+    }
+}
+
+/// A cursor that can be cloned as a `dyn Cursor` when it is inside a [`Box`].
+///
+/// Rust doesn't have a built-in way to clone boxed trait objects.  This
+/// provides such a way for boxed [`Cursor`]s.
+pub trait ClonableCursor<'s, K, V, T, R>: Cursor<K, V, T, R> + Debug
+where
+    K: ?Sized,
+    V: ?Sized,
+    R: ?Sized,
+{
+    fn clone_boxed(&self) -> Box<dyn ClonableCursor<'s, K, V, T, R> + 's>;
+}
+
+impl<'s, K, V, T, R, C> ClonableCursor<'s, K, V, T, R> for C
+where
+    K: ?Sized,
+    V: ?Sized,
+    R: ?Sized,
+    C: Cursor<K, V, T, R> + Debug + Clone + 's,
+{
+    fn clone_boxed(&self) -> Box<dyn ClonableCursor<'s, K, V, T, R> + 's> {
+        Box::new(self.clone())
+    }
+}
+
+/// A wrapper around a `dyn Cursor` to allow choice of implementations at runtime.
+#[derive(Debug, SizeOf)]
+pub struct DelegatingCursor<'s, K, V, T, R>(pub Box<dyn ClonableCursor<'s, K, V, T, R> + 's>)
+where
+    K: ?Sized,
+    V: ?Sized,
+    R: ?Sized;
+
+impl<'s, K, V, T, R> Clone for DelegatingCursor<'s, K, V, T, R>
+where
+    K: ?Sized,
+    V: ?Sized,
+    R: ?Sized,
+{
+    fn clone(&self) -> Self {
+        Self(self.0.clone_boxed())
+    }
+}
+
+impl<'s, K, V, T, R> Cursor<K, V, T, R> for DelegatingCursor<'s, K, V, T, R>
+where
+    K: ?Sized,
+    V: ?Sized,
+    R: ?Sized,
+{
+    fn weight_factory(&self) -> &'static dyn Factory<R> {
+        self.0.weight_factory()
+    }
+
+    fn key(&self) -> &K {
+        self.0.key()
+    }
+
+    fn val(&self) -> &V {
+        self.0.val()
+    }
+
+    fn map_times(&mut self, logic: &mut dyn FnMut(&T, &R)) {
+        self.0.map_times(logic)
+    }
+
+    fn map_times_through(&mut self, upper: &T, logic: &mut dyn FnMut(&T, &R)) {
+        self.0.map_times_through(upper, logic)
+    }
+
+    fn map_values(&mut self, logic: &mut dyn FnMut(&V, &R))
+    where
+        T: PartialEq<()>,
+    {
+        self.0.map_values(logic)
+    }
+
+    fn weight(&mut self) -> &R
+    where
+        T: PartialEq<()>,
+    {
+        self.0.weight()
+    }
+
+    fn key_valid(&self) -> bool {
+        self.0.key_valid()
+    }
+
+    fn val_valid(&self) -> bool {
+        self.0.val_valid()
+    }
+
+    fn step_key(&mut self) {
+        self.0.step_key()
+    }
+
+    fn step_key_reverse(&mut self) {
+        self.0.step_key_reverse()
+    }
+
+    fn seek_key(&mut self, key: &K) {
+        self.0.seek_key(key)
+    }
+
+    fn seek_key_with(&mut self, predicate: &dyn Fn(&K) -> bool) {
+        self.0.seek_key_with(predicate)
+    }
+
+    fn seek_key_with_reverse(&mut self, predicate: &dyn Fn(&K) -> bool) {
+        self.0.seek_key_with_reverse(predicate)
+    }
+
+    fn seek_key_reverse(&mut self, key: &K) {
+        self.0.seek_key_reverse(key)
+    }
+
+    fn step_val(&mut self) {
+        self.0.step_val()
+    }
+
+    fn seek_val(&mut self, val: &V) {
+        self.0.seek_val(val)
+    }
+
+    fn seek_val_with(&mut self, predicate: &dyn Fn(&V) -> bool) {
+        self.0.seek_val_with(predicate)
+    }
+
+    fn rewind_keys(&mut self) {
+        self.0.rewind_keys()
+    }
+
+    fn fast_forward_keys(&mut self) {
+        self.0.fast_forward_keys()
+    }
+
+    fn rewind_vals(&mut self) {
+        self.0.rewind_vals()
+    }
+
+    fn step_val_reverse(&mut self) {
+        self.0.step_val_reverse()
+    }
+
+    fn seek_val_reverse(&mut self, val: &V) {
+        self.0.seek_val_reverse(val)
+    }
+
+    fn seek_val_with_reverse(&mut self, predicate: &dyn Fn(&V) -> bool) {
+        self.0.seek_val_with_reverse(predicate)
+    }
+
+    fn fast_forward_vals(&mut self) {
+        self.0.fast_forward_vals()
+    }
+}
+
+/// Visits the `(time, diff)` pairs at a [`Cursor`]'s `(key, value)` position.
+///
+/// Obtained via [`HasTimeDiffCursor`].
+///
+/// Within time-diff pairs, the times may not be ordered or unique and, in
+/// particular, [`CursorList`](`cursor_list::CursorList`) cursors can contain
+/// out-of-order and duplicate timestamps.  Because duplicate times are
+/// possible, it's possible to have multiple diffs even when `T = ()`.
+///
+/// That said, most specific kinds of batches do guarantee unique and ordered
+/// time-diff pairs, including [`OrdWSet`](crate::trace::ord::OrdWSet),
+/// [`OrdIndexedWSet`](crate::trace::ord::OrdIndexedWSet), and similar `WSet`
+/// and `ZSet` types and indexed versions.
+pub trait TimeDiffCursor<'a, T, R>
+where
+    R: ?Sized,
+{
+    /// Returns the current time-diff pair, if there is one, or `None` if the
+    /// cursor has been exhausted.
+    fn current<'b>(&'b mut self, tmp: &'b mut R) -> Option<(&T, &R)>;
+
+    /// Advances to the next time-diff pair.
+    fn step(&mut self);
+}
+
+/// Obtains a [`TimeDiffCursor`] for a [`Cursor`]'s current position.
+///
+/// Not every cursor type implements this trait.  It's usually better to use
+/// [`Cursor::map_times`] and related functions, which are always available.
+pub trait HasTimeDiffCursor<K, V, T, R>: Cursor<K, V, T, R>
+where
+    K: ?Sized,
+    V: ?Sized,
+    R: ?Sized,
+{
+    /// The `(time, diff)` cursor type for the [`Cursor`].
+    type TimeDiffCursor<'a>: TimeDiffCursor<'a, T, R>
+    where
+        Self: 'a;
+
+    /// Returns the [`TimeDiffCursor`] for this cursor's key-value position.  If
+    /// the current key or value is not valid, the returned cursor will have
+    /// length 0.
+    fn time_diff_cursor(&self) -> Self::TimeDiffCursor<'_>;
+}
+
+/// An implementation of [`TimeDiffCursor`] for simple cases.
+pub struct SingletonTimeDiffCursor<'a, R>(Option<&'a R>)
+where
+    R: ?Sized;
+
+impl<'a, R> SingletonTimeDiffCursor<'a, R>
+where
+    R: ?Sized,
+{
+    pub fn new(diff: Option<&'a R>) -> Self {
+        Self(diff)
+    }
+}
+
+impl<'a, R> TimeDiffCursor<'a, (), R> for SingletonTimeDiffCursor<'a, R>
+where
+    R: ?Sized,
+{
+    fn current(&mut self, _tmp: &mut R) -> Option<(&(), &R)> {
+        self.0.map(|diff| (&(), diff))
+    }
+
+    fn step(&mut self) {
+        self.0 = None;
     }
 }
 

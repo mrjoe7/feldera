@@ -1,12 +1,14 @@
+#![allow(dead_code)]
+
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Result as AnyResult};
-use log::debug;
 use pipeline_types::secret_ref::MaybeSecretRef;
 use regex::Regex;
+use tracing::debug;
 
 /// Enumeration which holds a simple string or a resolved secret's string.
 ///

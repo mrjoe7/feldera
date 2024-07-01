@@ -7,20 +7,22 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.calcite.runtime.CalciteContextException;
 import org.apache.calcite.sql.parser.SqlParseException;
 import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
+import org.dbsp.sqlCompiler.compiler.IHasSourcePositionRange;
+import org.dbsp.util.Utilities;
 
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
 
 public class CompilerMessages {
-    public class Error {
+    public class Error implements IHasSourcePositionRange {
         public final SourcePositionRange range;
         public final boolean warning;
         public final String errorType;
         public final String message;
 
-        protected Error(SourcePositionRange range, boolean warning, String errorType, String message) {
-            this.range = range;
+        protected Error(IHasSourcePositionRange range, boolean warning, String errorType, String message) {
+            this.range = range.getPositionRange();
             this.warning = warning;
             this.errorType = errorType;
             this.message = message;
@@ -41,7 +43,8 @@ public class CompilerMessages {
 
         Error(Throwable e) {
             this(SourcePositionRange.INVALID, false,
-                    "This is a bug in the compiler (please report it to the developers)", e.getMessage());
+                    "This is a bug in the compiler (please report it to the developers)",
+                    e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
         }
 
         Error(BaseCompilerException e) {
@@ -72,7 +75,7 @@ public class CompilerMessages {
             output.append(contents.getFragment(this.range));
         }
 
-        public JsonNode toJson(ObjectMapper mapper) {
+        public JsonNode toJson(SourceFileContents contents, ObjectMapper mapper) {
             ObjectNode result = mapper.createObjectNode();
             result.put("startLineNumber", this.range.start.line);
             result.put("startColumn", this.range.start.column);
@@ -81,6 +84,8 @@ public class CompilerMessages {
             result.put("warning", this.warning);
             result.put("errorType", this.errorType);
             result.put("message", this.message);
+            String snippet = contents.getFragment(this.range);
+            result.put("snippet", snippet);
             return result;
         }
 
@@ -89,6 +94,11 @@ public class CompilerMessages {
             StringBuilder builder = new StringBuilder();
             this.format(CompilerMessages.this.compiler.sources, builder);
             return builder.toString();
+        }
+
+        @Override
+        public SourcePositionRange getPositionRange() {
+            return this.range;
         }
     }
 
@@ -116,7 +126,7 @@ public class CompilerMessages {
         }
     }
 
-    public void reportProblem(SourcePositionRange range, boolean warning,
+    public void reportProblem(IHasSourcePositionRange range, boolean warning,
                               String errorType, String message) {
         Error msg = new Error(range, warning, errorType, message);
         this.reportError(msg);
@@ -160,7 +170,7 @@ public class CompilerMessages {
     public String toString() {
         StringBuilder builder = new StringBuilder();
         if (this.compiler.options.ioOptions.emitJsonErrors) {
-            JsonNode node = this.toJson();
+            JsonNode node = this.toJson(this.compiler.sources);
             builder.append(node.toPrettyString());
         } else {
             for (Error message: this.messages) {
@@ -176,11 +186,11 @@ public class CompilerMessages {
         return this.messages.isEmpty();
     }
 
-    public JsonNode toJson() {
-        ObjectMapper mapper = new ObjectMapper();
+    public JsonNode toJson(SourceFileContents contents) {
+        ObjectMapper mapper = Utilities.deterministicObjectMapper();
         ArrayNode result = mapper.createArrayNode();
         for (Error message: this.messages) {
-            JsonNode node = message.toJson(mapper);
+            JsonNode node = message.toJson(contents, mapper);
             result.add(node);
         }
         return result;

@@ -118,7 +118,7 @@
 
 mod clonable;
 mod comparable;
-mod data;
+pub(crate) mod data;
 mod declare_trait_object;
 mod downcast;
 mod erase;
@@ -127,7 +127,7 @@ mod lean_vec;
 mod option;
 pub mod pair;
 mod pairs;
-mod rkyv;
+pub(crate) mod rkyv;
 mod set;
 mod vec;
 mod weight;

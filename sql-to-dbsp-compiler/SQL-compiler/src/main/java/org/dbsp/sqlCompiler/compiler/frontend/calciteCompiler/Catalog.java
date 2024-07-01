@@ -25,43 +25,49 @@ package org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Multimap;
+import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.schema.Function;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.impl.AbstractSchema;
-import org.apache.calcite.sql.SqlIdentifier;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
-import org.dbsp.sqlCompiler.compiler.errors.UnsupportedException;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.frontend.statements.FrontEndStatement;
 import org.dbsp.util.Utilities;
 
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Maintains the catalog: a mapping from table names to table objects.
- */
+/** Maintains the catalog: a mapping from names to objects. */
+// I am not sure this class is needed.
 public class Catalog extends AbstractSchema {
+    private static int crtid = 0;
+
     public final String schemaName;
+    private final int id;
     private final Map<String, Table> tableMap;
     private final Map<String, FrontEndStatement> definition;
     private final Multimap<String, Function> functionMap;
+    private final Map<String, RelProtoDataType> typeMap;
 
     public Catalog(String schemaName) {
+        this.id = crtid++;
         this.schemaName = schemaName;
         this.tableMap = new HashMap<>();
         this.definition = new HashMap<>();
+        this.typeMap = new HashMap<>();
         this.functionMap = ArrayListMultimap.create();
     }
 
-    public static String identifierToString(SqlIdentifier identifier) {
-        if (!identifier.isSimple())
-            throw new UnsupportedException("Not a simple identifier", CalciteObject.create(identifier));
-        return identifier.getSimple();
+    public Catalog(Catalog other) {
+        this.id = crtid++;
+        this.schemaName = other.schemaName;
+        this.tableMap = new HashMap<>(other.tableMap);
+        this.definition = new HashMap<>(other.definition);
+        this.typeMap = new HashMap<>(other.typeMap);
+        this.functionMap = ArrayListMultimap.create(other.functionMap);
     }
 
-    public boolean addTable(String name, Table table, IErrorReporter reporter, FrontEndStatement statement) {
-        if (this.tableMap.containsKey(name)) {
+    boolean addDefinition(String name, IErrorReporter reporter, FrontEndStatement statement) {
+        if (this.definition.containsKey(name)) {
             reporter.reportError(statement.getPosition(), "Duplicate declaration",
                     Utilities.singleQuote(name) + " already defined");
             FrontEndStatement previous = this.definition.get(name);
@@ -69,12 +75,19 @@ public class Catalog extends AbstractSchema {
                     "Location of previous definition");
             return false;
         }
-        this.tableMap.put(name, table);
         this.definition.put(name, statement);
         return true;
     }
 
-    public void addFunction(String name, Function function) { this.functionMap.put(name, function); }
+    public boolean addTable(String name, Table table, IErrorReporter reporter, FrontEndStatement statement) {
+        this.tableMap.put(name, table);
+        return this.addDefinition(name, reporter, statement);
+    }
+
+    @Override
+    public Map<String, RelProtoDataType> getTypeMap() {
+        return this.typeMap;
+    }
 
     @Override
     public Map<String, Table> getTableMap() {
@@ -88,5 +101,10 @@ public class Catalog extends AbstractSchema {
 
     public void dropTable(String tableName) {
         this.tableMap.remove(tableName);
+    }
+
+    public boolean addType(String name, IErrorReporter reporter, FrontEndStatement statement) {
+        // Does not insert in the typeMap.
+        return this.addDefinition(name, reporter, statement);
     }
 }

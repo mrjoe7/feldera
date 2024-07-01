@@ -1,6 +1,6 @@
 use dbsp::{
-    mimalloc::MiMalloc, operator::Generator, utils::Tup2, Circuit, OrdZSet, RootCircuit, Runtime,
-    Stream,
+    mimalloc::MiMalloc, operator::Generator, typed_batch::DynBatchReader, utils::Tup2, Circuit,
+    OrdZSet, RootCircuit, Runtime, Stream,
 };
 
 #[global_allocator]
@@ -127,7 +127,8 @@ fn main() {
         //fs::write("path.dot", graph.to_dot()).unwrap();
 
         circuit.step().unwrap();
-    });
+    })
+    .expect("runtime initialization should succeed");
 
     hruntime.join().unwrap();
 }

@@ -4,9 +4,9 @@ use crate::{
     transport::http::{
         HttpInputEndpoint, HttpInputTransport, HttpOutputEndpoint, HttpOutputTransport,
     },
-    CircuitCatalog, Controller, ControllerError, DbspCircuitHandle, FormatConfig, InputEndpoint,
+    CircuitCatalog, Controller, ControllerError, DbspCircuitHandle, FormatConfig,
     InputEndpointConfig, InputFormat, OutputEndpoint, OutputEndpointConfig, OutputFormat,
-    PipelineConfig,
+    PipelineConfig, TransportInputEndpoint,
 };
 use actix_web::{
     dev::{ServiceFactory, ServiceRequest},
@@ -21,8 +21,6 @@ use colored::Colorize;
 use dbsp::circuit::CircuitConfig;
 use dbsp::operator::sample::MAX_QUANTILES;
 use env_logger::Env;
-use log::{debug, error, info, warn};
-use pipeline_types::config::OutputBufferConfig;
 use pipeline_types::{format::json::JsonFlavor, transport::http::EgressMode};
 use pipeline_types::{query::OutputQuery, transport::http::SERVER_PORT_FILE};
 use serde::Deserialize;
@@ -42,6 +40,7 @@ use tokio::{
     spawn,
     sync::mpsc::{channel, Sender},
 };
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 pub mod error;
@@ -431,6 +430,7 @@ where
         .service(stats)
         .service(metrics)
         .service(metadata)
+        .service(heap_profile)
         .service(dump_profile)
         .service(input_endpoint)
         .service(output_endpoint)
@@ -499,6 +499,33 @@ async fn metadata(state: WebData<ServerState>) -> impl Responder {
     HttpResponse::Ok()
         .content_type(mime::APPLICATION_JSON)
         .body(state.metadata.read().unwrap().clone())
+}
+
+#[get("/heap_profile")]
+async fn heap_profile() -> impl Responder {
+    #[cfg(target_os = "linux")]
+    {
+        let mut prof_ctl = jemalloc_pprof::PROF_CTL.as_ref().unwrap().lock().await;
+        if !prof_ctl.activated() {
+            return Err(PipelineError::HeapProfilerError {
+                error: "jemalloc profiling is disabled".to_string(),
+            });
+        }
+        match prof_ctl.dump_pprof() {
+            Ok(profile) => Ok(HttpResponse::Ok()
+                .content_type("application/protobuf")
+                .body(profile)),
+            Err(e) => Err(PipelineError::HeapProfilerError {
+                error: e.to_string(),
+            }),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err::<HttpResponse, PipelineError>(PipelineError::HeapProfilerError {
+            error: "heap profiling is only supported on Linux".to_string(),
+        })
+    }
 }
 
 #[get("/dump_profile")]
@@ -574,8 +601,13 @@ async fn input_endpoint(
         stream: Cow::from(table_name),
         connector_config: ConnectorConfig {
             transport: HttpInputTransport::config(),
-            format: parser_config_from_http_request(&endpoint_name, &args.format, &req)?,
-            max_buffered_records: HttpInputTransport::default_max_buffered_records(),
+            format: Some(parser_config_from_http_request(
+                &endpoint_name,
+                &args.format,
+                &req,
+            )?),
+            output_buffer_config: Default::default(),
+            max_queued_records: HttpInputTransport::default_max_buffered_records(),
         },
     };
 
@@ -589,7 +621,7 @@ async fn input_endpoint(
             match controller.add_input_endpoint(
                 &endpoint_name,
                 config,
-                Box::new(endpoint.clone()) as Box<dyn InputEndpoint>,
+                Box::new(endpoint.clone()) as Box<dyn TransportInputEndpoint>,
             ) {
                 Ok(endpoint_id) => endpoint_id,
                 Err(e) => {
@@ -669,6 +701,18 @@ struct EgressArgs {
     /// Output mode.
     #[serde(default)]
     mode: EgressMode,
+
+    /// Apply backpressure on the pipeline when the HTTP client cannot receive
+    /// data fast enough.
+    ///
+    /// When this flag is set to false (the default), the HTTP connector drops data
+    /// chunks if the client is not keeping up with its output.  This prevents
+    /// a slow HTTP client from slowing down the entire pipeline.
+    ///
+    /// When the flag is set to true, the connector waits for the client to receive
+    /// each chunk and blocks the pipeline if the client cannot keep up.
+    #[serde(default)]
+    backpressure: bool,
 
     /// Data format used to encode the output of the query, e.g., 'csv',
     /// 'json' etc.
@@ -750,17 +794,22 @@ async fn output_endpoint(
             OutputQuery::Neighborhood | OutputQuery::Quantiles
         ),
         args.mode == EgressMode::Watch,
+        args.backpressure,
     );
 
     // Create endpoint config.
     let config = OutputEndpointConfig {
         stream: Cow::from(table_name),
         query: args.query,
-        output_buffer_config: OutputBufferConfig::default(),
         connector_config: ConnectorConfig {
             transport: HttpOutputTransport::config(),
-            format: encoder_config_from_http_request(&endpoint_name, &args.format, &req)?,
-            max_buffered_records: HttpOutputTransport::default_max_buffered_records(),
+            format: Some(encoder_config_from_http_request(
+                &endpoint_name,
+                &args.format,
+                &req,
+            )?),
+            output_buffer_config: Default::default(),
+            max_queued_records: HttpOutputTransport::default_max_buffered_records(),
         },
     };
 
@@ -884,7 +933,7 @@ mod test_with_kafka {
             generate_test_batches,
             http::{TestHttpReceiver, TestHttpSender},
             kafka::{BufferConsumer, KafkaResources, TestProducer},
-            test_circuit,
+            test_circuit, TestStruct,
         },
     };
     use actix_web::{
@@ -917,8 +966,8 @@ mod test_with_kafka {
             .unwrap()
             .current();
 
-        //let _ = log::set_logger(&TEST_LOGGER);
-        //log::set_max_level(LevelFilter::Debug);
+        //let _ = tracing::set_logger(&TEST_LOGGER);
+        //tracing::set_max_level(LevelFilter::Debug);
 
         // Create topics.
         let kafka_resources = KafkaResources::create_topics(&[
@@ -927,7 +976,7 @@ mod test_with_kafka {
         ]);
 
         // Create buffer consumer
-        let buffer_consumer = BufferConsumer::new("test_server_output_topic", "csv", "");
+        let buffer_consumer = BufferConsumer::new("test_server_output_topic", "csv", "", None);
 
         // Config string
         let config_str = r#"
@@ -973,7 +1022,7 @@ outputs:
         thread::spawn(move || {
             bootstrap(
                 args,
-                |workers| Ok(test_circuit(workers)),
+                |workers| Ok(test_circuit::<TestStruct>(workers, &TestStruct::schema())),
                 state_clone,
                 std::sync::mpsc::channel().0,
             )
@@ -1087,9 +1136,17 @@ outputs:
         }
 
         println!("Connecting to HTTP output endpoint");
-        let mut resp1 = server.post("/egress/test_output1").send().await.unwrap();
+        let mut resp1 = server
+            .post("/egress/test_output1?backpressure=true")
+            .send()
+            .await
+            .unwrap();
 
-        let mut resp2 = server.post("/egress/test_output1").send().await.unwrap();
+        let mut resp2 = server
+            .post("/egress/test_output1?backpressure=true")
+            .send()
+            .await
+            .unwrap();
 
         println!("Streaming test");
         let req = server.post("/ingress/test_input1");
@@ -1130,7 +1187,7 @@ outputs:
 
         // Request quantiles.
         let mut quantiles_resp1 = server
-            .post("/egress/test_output1?mode=snapshot&query=quantiles")
+            .post("/egress/test_output1?mode=snapshot&query=quantiles&backpressure=true")
             .send()
             .await
             .unwrap();
@@ -1143,7 +1200,7 @@ outputs:
         // Request quantiles for the input collection -- inputs must also behave as
         // outputs.
         let mut input_quantiles = server
-            .post("/egress/test_input1?mode=snapshot&query=quantiles")
+            .post("/egress/test_input1?mode=snapshot&query=quantiles&backpressure=true")
             .send()
             .await
             .unwrap();
@@ -1154,7 +1211,7 @@ outputs:
 
         // Request neighborhood snapshot.
         let mut hood_resp1 = server
-            .post("/egress/test_output1?mode=snapshot&query=neighborhood")
+            .post("/egress/test_output1?mode=snapshot&query=neighborhood&backpressure=true")
             .send_json(
                 &json!({"anchor": {"id": 1000, "b": true, "s": "foo"}, "before": 50, "after": 30}),
             )
@@ -1168,7 +1225,7 @@ outputs:
 
         // Request default neighborhood snapshot.
         let mut hood_resp_default = server
-            .post("/egress/test_output1?mode=snapshot&query=neighborhood")
+            .post("/egress/test_output1?mode=snapshot&query=neighborhood&backpressure=true")
             .send_json(&json!({"before": 50, "after": 30}))
             .await
             .unwrap();
@@ -1180,7 +1237,7 @@ outputs:
 
         // Request neighborhood snapshot: invalid request.
         let mut hood_inv_resp = server
-            .post("/egress/test_output1?mode=snapshot&query=neighborhood")
+            .post("/egress/test_output1?mode=snapshot&query=neighborhood&backpressure=true")
             .send_json(
                 &json!({"anchor": {"id": "string_instead_of_integer", "b": true, "s": "foo"}, "before": 50, "after": 30}),
             )
@@ -1194,7 +1251,7 @@ outputs:
 
         // Request neighborhood stream.
         let mut hood_resp2 = server
-            .post("/egress/test_output1?mode=watch&query=neighborhood")
+            .post("/egress/test_output1?mode=watch&query=neighborhood&backpressure=true")
             .send_json(
                 &json!({"anchor": {"id": 1000, "b": true, "s": "foo"}, "before": 50, "after": 30}),
             )

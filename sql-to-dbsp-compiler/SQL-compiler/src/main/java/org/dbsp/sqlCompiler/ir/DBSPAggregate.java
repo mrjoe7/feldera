@@ -2,9 +2,10 @@ package org.dbsp.sqlCompiler.ir;
 
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.BetaReduction;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPAssignmentExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPBlockExpression;
@@ -19,7 +20,7 @@ import org.dbsp.sqlCompiler.ir.statement.DBSPLetStatement;
 import org.dbsp.sqlCompiler.ir.statement.DBSPStatement;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeSemigroup;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeSemigroup;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTupleBase;
 import org.dbsp.util.IIndentStream;
@@ -31,11 +32,11 @@ import java.util.List;
 import java.util.Objects;
 
 
-/**
- * Description of an aggregate.
- * In general an aggregate performs multiple simple aggregates simultaneously.
- */
-public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
+/** Description of an aggregate.
+ * In general an aggregate performs multiple simple aggregates simultaneously. */
+public final class DBSPAggregate extends DBSPNode
+        implements IDBSPInnerNode, IDBSPDeclaration // Declares the row variable
+{
     public final DBSPVariablePath rowVar;
     public final Implementation[] components;
     public final boolean isWindowAggregate;
@@ -122,7 +123,7 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
         }
         DBSPType[] accumulatorTypes = Linq.map(closures, c -> c.parameters[0].getType(), DBSPType.class);
         List<DBSPType> flatAccumTypes = Linq.flatMap(accumulatorTypes, this::flatten);
-        DBSPVariablePath accumParam = new DBSPTypeTuple(flatAccumTypes).var("a");
+        DBSPVariablePath accumParam = new DBSPTypeTuple(flatAccumTypes).var();
         DBSPParameter accumulator = accumParam.asParameter();
         DBSPParameter row;
         DBSPParameter weight;
@@ -139,7 +140,6 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
         int start = 0;
         for (int i = 0; i < closures.length; i++) {
             DBSPClosureExpression closure = closures[i];
-            String tmp = "tmp" + i;
             // Must package together several accumulator fields if the original type was a tuple
             DBSPType accumulatorType = accumulatorTypes[i];
             DBSPTypeTupleBase tuple = accumulatorType.as(DBSPTypeTupleBase.class);
@@ -155,8 +155,8 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
             }
             DBSPExpression init = closure.call(
                     accumulatorArgs, row.asVariable(), weight.asVariable());
-            DBSPLetStatement stat = new DBSPLetStatement(tmp, init);
-            DBSPVariablePath tmpI = new DBSPVariablePath(tmp, init.getType());
+            DBSPVariablePath tmpI = init.getType().var();
+            DBSPLetStatement stat = new DBSPLetStatement(tmpI.variable, init);
             tmpVars.addAll(DBSPTypeTupleBase.flatten(tmpI));
             body.add(stat);
         }
@@ -190,6 +190,16 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
         return this.components.length == 0;
     }
 
+    @Override
+    public String getName() {
+        return this.rowVar.variable;
+    }
+
+    @Override
+    public DBSPType getType() {
+        return this.rowVar.getType();
+    }
+
     /**
      * An aggregate is compiled as functional fold operation,
      * described by a zero (initial value), an increment
@@ -200,33 +210,21 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
      * for the increment.
      */
     public static class Implementation extends DBSPNode implements IDBSPInnerNode {
-        /**
-         * Zero of the fold function.
-         */
+        /** Zero of the fold function. */
         public final DBSPExpression zero;
-        /**
-         * A closure with signature |accumulator, value, weight| -> accumulator
-         */
+        /** A closure with signature |accumulator, value, weight| -> accumulator */
         public final DBSPClosureExpression increment;
-        /**
-         * Function that may post-process the accumulator to produce the final result.
-         */
+        /** Function that may post-process the accumulator to produce the final result. */
         @Nullable
         public final DBSPClosureExpression postProcess;
-        /**
-         * Result produced for an empty set (DBSP produces no result in this case).
-         */
+        /** Result produced for an empty set (DBSP produces no result in this case). */
         public final DBSPExpression emptySetResult;
-        /**
-         * Name of the Type that implements the semigroup for this operation.
-         */
+        /** Name of the Type that implements the semigroup for this operation. */
         public final DBSPType semigroup;
-        /**
-         * If non-null this is a function with the signature
+        /** If non-null this is a function with the signature
          * |value| accumulator, where 'accumulator' implements
          * GroupValue.  The function is applied to each row, the result
-         * is weighted by the row weight, and the results are added.
-         */
+         * is weighted by the row weight, and the results are added. */
         @Nullable
         public final DBSPClosureExpression linearFunction;
 
@@ -296,7 +294,7 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
             if (this.postProcess != null)
                 return this.postProcess;
             // If it is not set return the identity function
-            DBSPVariablePath var = new DBSPVariablePath("x", Objects.requireNonNull(this.increment.getResultType()));
+            DBSPVariablePath var = new DBSPVariablePath(Objects.requireNonNull(this.increment.getResultType()));
             return var.closure(var.asParameter());
         }
 
@@ -364,6 +362,15 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
             builder.newline().decrease().append("]");
             return builder;
         }
+
+        public boolean equivalent(EquivalenceContext context, Implementation other) {
+            return context.equivalent(this.zero, other.zero) &&
+                    context.equivalent(this.increment, other.increment) &&
+                    context.equivalent(this.postProcess, other.postProcess) &&
+                    context.equivalent(this.emptySetResult, other.emptySetResult) &&
+                    context.equivalent(this.linearFunction, other.linearFunction) &&
+                    this.semigroup.sameType(other.semigroup);
+        }
     }
 
     public boolean isLinear() {
@@ -388,9 +395,7 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
         return builder.decrease();
     }
 
-    /**
-     * Combines multiple DBSPAggregate.Implementation objects into one.
-     */
+    /** Combines multiple DBSPAggregate.Implementation objects into one. */
     public DBSPAggregate.Implementation combine(IErrorReporter reporter) {
         int parts = this.components.length;
         DBSPExpression[] zeros = new DBSPExpression[parts];
@@ -425,10 +430,10 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
         }
 
         DBSPTypeTuple accumulatorType = new DBSPTypeTuple(accumulatorTypes);
-        DBSPVariablePath accumulator = accumulatorType.ref(true).var("a");
-        DBSPVariablePath postAccumulator = accumulatorType.var("a");
+        DBSPVariablePath accumulator = accumulatorType.ref(true).var();
+        DBSPVariablePath postAccumulator = accumulatorType.var();
 
-        DBSPVariablePath weightVar = new DBSPVariablePath("w", Objects.requireNonNull(weightType));
+        DBSPVariablePath weightVar = new DBSPVariablePath(Objects.requireNonNull(weightType));
         for (int i = 0; i < parts; i++) {
             DBSPExpression accumulatorField = accumulator.deref().field(i);
             DBSPExpression expr = increments[i].call(
@@ -448,5 +453,23 @@ public class DBSPAggregate extends DBSPNode implements IDBSPInnerNode {
         DBSPType semigroup = new DBSPTypeSemigroup(semigroups, accumulatorTypes);
         return new Implementation(this.getNode(), new DBSPTupleExpression(zeros),
                 accumFunction, postClosure, new DBSPTupleExpression(emptySetResults), semigroup, null);
+    }
+
+    public boolean equivalent(DBSPAggregate other) {
+        if (this.isWindowAggregate != other.isWindowAggregate)
+            return false;
+        if (this.components.length != other.components.length)
+            return false;
+        EquivalenceContext context = new EquivalenceContext();
+        context.leftDeclaration.newContext();
+        context.rightDeclaration.newContext();
+        context.leftDeclaration.substitute(this.rowVar.variable, this);
+        context.rightDeclaration.substitute(other.rowVar.variable, other);
+        context.leftToRight.substitute(this, other);
+        for (int i = 0; i < this.components.length; i++) {
+            if (!this.components[i].equivalent(context, other.components[i]))
+                return false;
+        }
+        return true;
     }
 }

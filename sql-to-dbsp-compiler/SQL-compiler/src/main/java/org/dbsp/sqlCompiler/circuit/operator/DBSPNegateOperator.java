@@ -23,13 +23,13 @@
 
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 
 import java.util.List;
 
-public class DBSPNegateOperator extends DBSPUnaryOperator {
+public final class DBSPNegateOperator extends DBSPUnaryOperator {
     public DBSPNegateOperator(CalciteObject node, DBSPOperator input) {
         super(node, "neg", null, input.outputType, input.isMultiset, input);
     }

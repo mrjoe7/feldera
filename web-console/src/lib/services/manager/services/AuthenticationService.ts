@@ -1,4 +1,4 @@
-/* generated using openapi-typescript-codegen -- do no edit */
+/* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
@@ -8,7 +8,6 @@ import { OpenAPI } from '../core/OpenAPI'
 import { request as __request } from '../core/request'
 export class AuthenticationService {
   /**
-   * Get authentication provider configuration
    * Get authentication provider configuration
    * @returns AuthProvider The response body contains Authentication Provider configuration, or is empty if no auth is configured.
    * @throws ApiError

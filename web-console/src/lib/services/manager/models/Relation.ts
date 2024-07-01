@@ -1,4 +1,4 @@
-/* generated using openapi-typescript-codegen -- do no edit */
+/* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
@@ -11,5 +11,6 @@ import type { Field } from './Field'
 export type Relation = {
   case_sensitive?: boolean
   fields: Array<Field>
+  materialized?: boolean
   name: string
 }

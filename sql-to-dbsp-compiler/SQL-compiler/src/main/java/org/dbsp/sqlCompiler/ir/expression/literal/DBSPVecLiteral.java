@@ -24,13 +24,14 @@
 package org.dbsp.sqlCompiler.ir.expression.literal;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.IDBSPContainer;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeVec;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeVec;
 import org.dbsp.util.IIndentStream;
 import org.dbsp.util.Linq;
 
@@ -39,23 +40,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Represents a (constant) vector described by its elements.
- */
-public class DBSPVecLiteral extends DBSPLiteral implements IDBSPContainer {
+/** Represents a (constant) vector described by its elements. */
+public final class DBSPVecLiteral extends DBSPLiteral implements IDBSPContainer {
     @Nullable
     public final List<DBSPExpression> data;
     public final DBSPTypeVec vecType;
 
-    public DBSPVecLiteral(DBSPType elementType) {
-        super(CalciteObject.EMPTY, new DBSPTypeVec(elementType, false), false);
-        this.data = new ArrayList<>();
-        this.vecType = this.getType().to(DBSPTypeVec.class);
+    public static DBSPVecLiteral emptyWithElementType(DBSPType elementType, boolean mayBeNull) {
+        return new DBSPVecLiteral(CalciteObject.EMPTY, new DBSPTypeVec(elementType, mayBeNull), Linq.list());
     }
 
     public DBSPVecLiteral(DBSPType vectorType, boolean isNull) {
         super(CalciteObject.EMPTY, vectorType, isNull);
-        this.data = null;
+        this.data = isNull ? null : new ArrayList<>();
         this.vecType = this.getType().to(DBSPTypeVec.class);
     }
 
@@ -66,7 +63,7 @@ public class DBSPVecLiteral extends DBSPLiteral implements IDBSPContainer {
         if (data != null) {
             for (DBSPExpression e : data) {
                 if (!e.getType().sameType(data.get(0).getType()))
-                    throw new InternalCompilerError("Not all values of set have the same type:" +
+                    throw new InternalCompilerError("Not all values of vector have the same type:" +
                             e.getType() + " vs " + data.get(0).getType(), this);
                 this.add(e);
             }
@@ -79,7 +76,7 @@ public class DBSPVecLiteral extends DBSPLiteral implements IDBSPContainer {
         this.data = new ArrayList<>();
         for (DBSPExpression e: data) {
             if (!e.getType().sameType(data[0].getType()))
-                throw new InternalCompilerError("Not all values of set have the same type:" +
+                throw new InternalCompilerError("Not all values of vector have the same type:" +
                         e.getType() + " vs " + data[0].getType(), this);
             this.add(e);
         }
@@ -128,9 +125,7 @@ public class DBSPVecLiteral extends DBSPLiteral implements IDBSPContainer {
 
     @Override
     public DBSPLiteral getWithNullable(boolean mayBeNull) {
-        if (mayBeNull)
-            throw new InternalCompilerError("Nullable vec");
-        return this;
+        return new DBSPVecLiteral(this.getNode(), this.type.setMayBeNull(mayBeNull), this.data);
     }
 
     @Override
@@ -161,6 +156,14 @@ public class DBSPVecLiteral extends DBSPLiteral implements IDBSPContainer {
     public DBSPExpression deepCopy() {
         return new DBSPVecLiteral(this.getNode(), this.getType(),
                 this.data != null ? Linq.map(this.data, DBSPExpression::deepCopy) : null);
+    }
+
+    @Override
+    public boolean equivalent(EquivalenceContext context, DBSPExpression other) {
+        DBSPVecLiteral otherExpression = other.as(DBSPVecLiteral.class);
+        if (otherExpression == null)
+            return false;
+        return context.equivalent(this.data, otherExpression.data);
     }
 
     // TODO: implement equals and hashcode

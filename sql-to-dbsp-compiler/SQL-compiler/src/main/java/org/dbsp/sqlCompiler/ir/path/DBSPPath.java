@@ -23,7 +23,7 @@
 
 package org.dbsp.sqlCompiler.ir.path;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.ir.DBSPNode;
 import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
@@ -72,5 +72,14 @@ public class DBSPPath extends DBSPNode implements IDBSPInnerNode {
     @Override
     public IIndentStream toString(IIndentStream builder) {
         return builder.join("::", this.components);
+    }
+
+    public boolean equivalent(DBSPPath other) {
+        if (this.components.length != other.components.length)
+            return false;
+        for (int i = 0; i < this.components.length; i++)
+            if (!this.components[i].equivalent(other.components[i]))
+                return false;
+        return true;
     }
 }

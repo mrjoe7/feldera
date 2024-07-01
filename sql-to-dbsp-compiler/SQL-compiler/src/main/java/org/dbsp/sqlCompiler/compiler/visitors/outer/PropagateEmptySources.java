@@ -5,7 +5,6 @@ import org.dbsp.sqlCompiler.circuit.operator.DBSPConstantOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPDifferentiateOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPDistinctOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPFilterOperator;
-import org.dbsp.sqlCompiler.circuit.operator.DBSPIndexOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPIntegrateOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPJoinOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPMapIndexOperator;
@@ -19,15 +18,15 @@ import org.dbsp.sqlCompiler.circuit.operator.DBSPStreamJoinOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPSubtractOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPSumOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPUnaryOperator;
-import org.dbsp.sqlCompiler.circuit.operator.DBSPWindowAggregateOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPViewOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPPartitionedRollingAggregateOperator;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIndexedZSetLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPZSetLiteral;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -101,19 +100,13 @@ public class PropagateEmptySources extends CircuitCloneVisitor {
     }
 
     @Override
-    public void postorder(DBSPWindowAggregateOperator operator) {
+    public void postorder(DBSPPartitionedRollingAggregateOperator operator) {
         if (this.replaceUnary(operator))
             super.postorder(operator);
     }
 
     @Override
     public void postorder(DBSPDistinctOperator operator) {
-        if (this.replaceUnary(operator))
-            super.postorder(operator);
-    }
-
-    @Override
-    public void postorder(DBSPIndexOperator operator) {
         if (this.replaceUnary(operator))
             super.postorder(operator);
     }
@@ -150,6 +143,12 @@ public class PropagateEmptySources extends CircuitCloneVisitor {
 
     @Override
     public void postorder(DBSPNoopOperator operator) {
+        if (this.replaceUnary(operator))
+            super.postorder(operator);
+    }
+
+    @Override
+    public void postorder(DBSPViewOperator operator) {
         if (this.replaceUnary(operator))
             super.postorder(operator);
     }

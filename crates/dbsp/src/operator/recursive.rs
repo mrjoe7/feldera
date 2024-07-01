@@ -1,3 +1,4 @@
+use crate::circuit::checkpointer::Checkpoint;
 use crate::{
     circuit::WithClock,
     dynamic::Erase,
@@ -37,7 +38,7 @@ impl<K, V, B, C> RecursiveStreams<C> for Stream<C, TypedBatch<K, V, ZWeight, B>>
 where
     C: Circuit,
     C::Parent: Circuit,
-    B: DynIndexedZSet + Send,
+    B: Checkpoint + DynIndexedZSet + Send + Sync,
     K: DBData + Erase<B::Key>,
     V: DBData + Erase<B::Val>,
 {
@@ -147,7 +148,6 @@ where
     /// ```
     /// use dbsp::{
     ///     operator::Generator,
-    ///     time::NestedTimestamp32,
     ///     OrdZSet,
     ///     Circuit, RootCircuit, Stream, zset, zset_set,
     ///     utils::Tup2,

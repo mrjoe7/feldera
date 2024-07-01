@@ -2,29 +2,20 @@ import useDefaultRows from '$lib/compositions/streaming/import/useDefaultRows'
 import useGenerateRows from '$lib/compositions/streaming/import/useGenerateRows'
 import useInsertRows from '$lib/compositions/streaming/import/useInsertRows'
 import { usePipelineManagerQuery } from '$lib/compositions/usePipelineManagerQuery'
-import { Row } from '$lib/functions/ddl'
+import { Row } from '$lib/functions/sqlValue'
 import { PipelineRevision, Relation } from '$lib/services/manager'
 import { LS_PREFIX } from '$lib/types/localStorage'
 import { PipelineStatus } from '$lib/types/pipeline'
-import BigNumber from 'bignumber.js'
+import { BigNumber } from 'bignumber.js/bignumber.js'
 import dayjs from 'dayjs'
 import Papa from 'papaparse'
-import { ChangeEvent, Dispatch, MutableRefObject, ReactNode, SetStateAction, useCallback } from 'react'
+import { ChangeEvent, Dispatch, ReactNode, SetStateAction, useCallback } from 'react'
 import { getCaseIndependentName } from 'src/lib/functions/felderaRelation'
 import JSONbig from 'true-json-bigint'
-import IconDuplicate from '~icons/bx/duplicate'
-import IconPlusCircle from '~icons/bx/plus-circle'
-import IconTrash from '~icons/bx/trash'
-import IconUpload from '~icons/bx/upload'
 
 import { useLocalStorage } from '@mantine/hooks'
 import { Button } from '@mui/material'
-import {
-  GridApi,
-  GridToolbarColumnsButton,
-  GridToolbarContainer,
-  GridToolbarDensitySelector
-} from '@mui/x-data-grid-pro'
+import { GridToolbarColumnsButton, GridToolbarContainer, GridToolbarDensitySelector } from '@mui/x-data-grid-pro'
 import { useQuery } from '@tanstack/react-query'
 
 import RngSettingsDialog, { StoredFieldSettings } from './RngSettingsDialog'
@@ -37,20 +28,18 @@ export type StoreSettingsFn = (
 
 const ImportToolbar = ({
   relation,
+  rows,
   setRows,
   pipelineRevision,
-  setLoading,
-  apiRef,
-  rows,
+  setIsBusy,
   children
 }: {
   relation: Relation
+  rows: Row[]
   setRows: Dispatch<SetStateAction<any[]>>
   pipelineRevision: PipelineRevision
-  setLoading: Dispatch<SetStateAction<boolean>>
-  apiRef: MutableRefObject<GridApi>
-  rows: Row[]
-  children: ReactNode
+  setIsBusy: Dispatch<SetStateAction<boolean>>
+  children?: ReactNode
 }) => {
   const pipelineManagerQuery = usePipelineManagerQuery()
   const { data: pipeline } = useQuery(pipelineManagerQuery.pipelineStatus(pipelineRevision.pipeline.name))
@@ -89,14 +78,14 @@ const ImportToolbar = ({
     setRows([])
   }
 
-  const insertDefaultRows = useDefaultRows(apiRef, setRows, relation)
-  const insertRandomRows = useGenerateRows(apiRef, setRows, relation, settings)
+  const insertDefaultRows = useDefaultRows(rows.length, setRows, relation)
+  const insertRandomRows = useGenerateRows(rows.length, setRows, relation, settings)
 
   // Function to handle the CSV file import
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleFileChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      setLoading(true)
+      setIsBusy(true)
       if (event.target.files && event.target.files.length > 0) {
         const file = event.target.files[0]
         const reader = new FileReader()
@@ -111,7 +100,7 @@ const ImportToolbar = ({
                 const row: Row = { genId: index, weight: 1, record }
                 newRows.push(row)
               })
-              setLoading(false)
+              setIsBusy(false)
               setRows(newRows)
             }
           }
@@ -119,7 +108,7 @@ const ImportToolbar = ({
         reader.readAsText(file)
       }
     },
-    [setLoading, setRows]
+    [setIsBusy, setRows]
   )
 
   // Sends new rows to the table
@@ -134,14 +123,14 @@ const ImportToolbar = ({
     <GridToolbarContainer>
       <GridToolbarColumnsButton />
       <GridToolbarDensitySelector />
-      <Button size='small' onClick={handleClearData} startIcon={<IconTrash />} data-testid='button-clear'>
+      <Button size='small' onClick={handleClearData} startIcon={<i className={`bx bx-trash />}`} style={{}} />}>
         Clear
       </Button>
       <RngSettingsDialog relation={relation} settings={settings} setSettings={setSettings} />
       <Button
         size='small'
         onClick={() => insertDefaultRows(1)}
-        startIcon={<IconPlusCircle />}
+        startIcon={<i className={`bx bx-plus-circle`} style={{}} />}
         data-testid='button-add-1-empty'
       >
         Add Default Row
@@ -149,7 +138,7 @@ const ImportToolbar = ({
       <Button
         size='small'
         onClick={() => insertRandomRows(1)}
-        startIcon={<IconPlusCircle />}
+        startIcon={<i className={`bx bx-plus-circle`} style={{}} />}
         data-testid='button-add-1-random'
       >
         1 Random Row
@@ -157,7 +146,7 @@ const ImportToolbar = ({
       <Button
         size='small'
         onClick={() => insertRandomRows(5)}
-        startIcon={<IconDuplicate />}
+        startIcon={<i className={`bx bx-duplicate`} style={{}} />}
         data-testid='button-add-5-random'
       >
         5 Random Rows
@@ -165,7 +154,7 @@ const ImportToolbar = ({
       <Button
         size='small'
         onClick={handleInsertRows}
-        startIcon={<IconUpload />}
+        startIcon={<i className={`bx bx-upload`} style={{}} />}
         color='info'
         data-testid='button-insert-rows'
       >

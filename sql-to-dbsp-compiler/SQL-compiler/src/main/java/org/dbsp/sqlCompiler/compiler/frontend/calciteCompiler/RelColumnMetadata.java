@@ -3,14 +3,12 @@ package org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexNode;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 
 import javax.annotation.Nullable;
 
-/**
- * Stores metadata for a column produced by an operator at the level
- * of Calcite Rel objects.
- */
+/** Stores metadata for a column produced by an operator at the level
+ * of Calcite Rel objects. */
 public class RelColumnMetadata {
     public final CalciteObject node;
     /** Column name and type. */
@@ -20,20 +18,36 @@ public class RelColumnMetadata {
     /** Lateness, if declared. */
     @Nullable
     public final RexNode lateness;
+    /** Lateness, if declared. */
+    @Nullable
+    public final RexNode watermark;
     /** Default value, if declared */
     @Nullable
     public final RexNode defaultValue;
     /** True if the column name was quoted. */
     public final boolean nameIsQuoted;
 
+    @Override
+    public String toString() {
+        return "RelColumnMetadata{" +
+                "field=" + this.field +
+                ", isPrimaryKey=" + this.isPrimaryKey +
+                ", lateness=" + this.lateness +
+                ", watermark=" + this.watermark +
+                ", defaultValue=" + this.defaultValue +
+                ", nameIsQuoted=" + this.nameIsQuoted +
+                '}';
+    }
+
     public RelColumnMetadata(
             CalciteObject node, RelDataTypeField field, boolean isPrimaryKey, boolean nameIsQuoted,
-            @Nullable RexNode lateness, @Nullable RexNode defaultValue) {
+            @Nullable RexNode lateness, @Nullable RexNode watermark, @Nullable RexNode defaultValue) {
         this.node = node;
         this.isPrimaryKey = isPrimaryKey;
         this.nameIsQuoted = nameIsQuoted;
         this.field = field;
         this.lateness = lateness;
+        this.watermark = watermark;
         this.defaultValue = defaultValue;
     }
 

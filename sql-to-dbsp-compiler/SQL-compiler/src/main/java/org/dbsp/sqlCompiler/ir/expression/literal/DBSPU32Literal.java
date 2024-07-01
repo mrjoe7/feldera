@@ -25,20 +25,21 @@ package org.dbsp.sqlCompiler.ir.expression.literal;
 
 import org.dbsp.sqlCompiler.compiler.errors.CompilationError;
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
+import org.dbsp.sqlCompiler.ir.type.IsNumericLiteral;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeInteger;
 import org.dbsp.util.IIndentStream;
 
 import javax.annotation.Nullable;
 import java.util.Objects;
 
-public class DBSPU32Literal extends DBSPIntLiteral {
+public final class DBSPU32Literal extends DBSPIntLiteral implements IsNumericLiteral {
     @Nullable
-    public final Integer value;
+    public final Long value;
 
     @Override
     public boolean sameValue(@Nullable DBSPLiteral o) {
@@ -48,18 +49,24 @@ public class DBSPU32Literal extends DBSPIntLiteral {
         return Objects.equals(value, that.value);
     }
 
-    public DBSPU32Literal(CalciteObject node, DBSPType type, @Nullable Integer value) {
+    public DBSPU32Literal(CalciteObject node, DBSPType type, @Nullable Long value) {
         super(node, type, value == null);
         if (value != null && value < 0)
             throw new CompilationError("Negative value for u32 literal " + value);
         this.value = value;
     }
 
-    public DBSPU32Literal(int value) {
+    @Override
+    public boolean gt0() {
+        assert this.value != null;
+        return this.value > 0;
+    }
+
+    public DBSPU32Literal(long value) {
         this(value, false);
     }
 
-    public DBSPU32Literal(@Nullable Integer value, boolean nullable) {
+    public DBSPU32Literal(@Nullable Long value, boolean nullable) {
         this(CalciteObject.EMPTY, new DBSPTypeInteger(CalciteObject.EMPTY, 32, false, nullable), value);
         if (value == null && !nullable)
             throw new InternalCompilerError("Null value with non-nullable type", this);

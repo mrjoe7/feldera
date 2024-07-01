@@ -24,14 +24,15 @@
 package org.dbsp.sqlCompiler.ir.expression;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.ir.IDBSPNode;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBool;
 import org.dbsp.util.IIndentStream;
 
-public class DBSPIfExpression extends DBSPExpression {
+public final class DBSPIfExpression extends DBSPExpression {
     public final DBSPExpression condition;
     public final DBSPExpression positive;
     public final DBSPExpression negative;
@@ -49,7 +50,7 @@ public class DBSPIfExpression extends DBSPExpression {
             throw new InternalCompilerError("Nullable condition in if expression", condition);
         if (!this.positive.getType().sameType(this.negative.getType()))
             throw new InternalCompilerError("Mismatched types in conditional expression " + this.positive +
-                    "/" + this.positive.getType() + " vs" + this.negative + "/" + this.negative.getType(), this);
+                    "/" + this.positive.getType() + " vs " + this.negative + "/" + this.negative.getType(), this);
     }
 
     @Override
@@ -109,5 +110,15 @@ public class DBSPIfExpression extends DBSPExpression {
     public DBSPExpression deepCopy() {
         return new DBSPIfExpression(this.getNode(), this.condition.deepCopy(),
                 this.positive.deepCopy(), this.negative.deepCopy());
+    }
+
+    @Override
+    public boolean equivalent(EquivalenceContext context, DBSPExpression other) {
+        DBSPIfExpression otherExpression = other.as(DBSPIfExpression.class);
+        if (otherExpression == null)
+            return false;
+        return context.equivalent(this.condition, otherExpression.condition) &&
+                context.equivalent(this.positive, otherExpression.positive) &&
+                context.equivalent(this.negative, otherExpression.negative);
     }
 }

@@ -1,8 +1,9 @@
 package org.dbsp.sqlCompiler.ir.expression;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.IDBSPNode;
 import org.dbsp.sqlCompiler.ir.NonCoreIR;
@@ -12,7 +13,7 @@ import org.dbsp.util.IIndentStream;
 /** This expression cannot appear in the IR tree representation
  * of a program.  It is only used as a value in dataflow analyses. */
 @NonCoreIR
-public class NoExpression extends DBSPExpression {
+public final class NoExpression extends DBSPExpression {
     public NoExpression(DBSPType type) {
         super(CalciteObject.EMPTY, type);
     }
@@ -37,7 +38,12 @@ public class NoExpression extends DBSPExpression {
     }
 
     @Override
+    public boolean equivalent(EquivalenceContext context, DBSPExpression other) {
+        return other.is(NoExpression.class);
+    }
+
+    @Override
     public IIndentStream toString(IIndentStream builder) {
-        return builder.append("[NO]");
+        return builder.append("[NO]:").append(this.type);
     }
 }

@@ -1,19 +1,28 @@
 use crate::catalog::{SerBatchReader, SerTrace};
+#[cfg(feature = "with-avro")]
+use crate::format::avro::serializer::{
+    avro_serde_config, AvroSchemaSerializer, AvroSerializerError,
+};
 use crate::{
     catalog::{RecordFormat, SerBatch, SerCollectionHandle, SerCursor},
     ControllerError,
 };
 use anyhow::Result as AnyResult;
+#[cfg(feature = "with-avro")]
+use apache_avro::types::Value as AvroValue;
+#[cfg(feature = "with-avro")]
+use apache_avro::Schema as AvroSchema;
 use csv::{Writer as CsvWriter, WriterBuilder as CsvWriterBuilder};
 use dbsp::dynamic::DowncastTrait;
 use dbsp::trace::merge_batches;
 use dbsp::typed_batch::{DynBatchReader, DynSpine, DynTrace, Spine, TypedBatch};
 use dbsp::{trace::Cursor, Batch, BatchReader, OutputHandle, Trace};
+use pipeline_types::serde_with_context::serialize::SerializeWithContextWrapper;
 use pipeline_types::serde_with_context::{
-    SerializationContext, SerializeWithContext, SqlSerdeConfig,
+    DateFormat, SerializationContext, SerializeWithContext, SqlSerdeConfig, TimeFormat,
+    TimestampFormat,
 };
-use serde::Serialize;
-use serde_arrow::ArrowBuilder;
+use serde_arrow::ArrayBuilder;
 use std::any::Any;
 use std::{cell::RefCell, io, io::Write, marker::PhantomData, ops::DerefMut, sync::Arc};
 
@@ -62,16 +71,27 @@ where
 
 /// A serializer that encodes values to a byte array.
 trait BytesSerializer<C>: Send {
-    fn create(context: C) -> Self;
     fn serialize<T: SerializeWithContext<C>>(
         &mut self,
         val: &T,
         buf: &mut Vec<u8>,
     ) -> AnyResult<()>;
 
-    fn serialize_arrow<T>(&mut self, _val: &T, _buf: &mut ArrowBuilder) -> AnyResult<()>
+    fn serialize_arrow<T>(&mut self, _val: &T, _buf: &mut ArrayBuilder) -> AnyResult<()>
     where
-        T: Serialize,
+        T: SerializeWithContext<C>,
+    {
+        unimplemented!()
+    }
+
+    #[cfg(feature = "with-avro")]
+    fn serialize_avro<T>(
+        &mut self,
+        _val: &T,
+        _schema: &AvroSchema,
+    ) -> Result<AvroValue, AvroSerializerError>
+    where
+        T: SerializeWithContext<C>,
     {
         unimplemented!()
     }
@@ -82,7 +102,7 @@ struct CsvSerializer<C> {
     context: C,
 }
 
-impl<C> BytesSerializer<C> for CsvSerializer<C>
+impl<C> CsvSerializer<C>
 where
     C: Send,
 {
@@ -95,7 +115,12 @@ where
             context,
         }
     }
+}
 
+impl<C> BytesSerializer<C> for CsvSerializer<C>
+where
+    C: Send,
+{
     fn serialize<T>(&mut self, val: &T, buf: &mut Vec<u8>) -> AnyResult<()>
     where
         T: SerializeWithContext<C>,
@@ -114,13 +139,19 @@ struct JsonSerializer<C> {
     context: C,
 }
 
-impl<C> BytesSerializer<C> for JsonSerializer<C>
+impl<C> JsonSerializer<C>
 where
     C: Send,
 {
     fn create(context: C) -> Self {
         Self { context }
     }
+}
+
+impl<C> BytesSerializer<C> for JsonSerializer<C>
+where
+    C: Send,
+{
     fn serialize<T>(&mut self, val: &T, buf: &mut Vec<u8>) -> AnyResult<()>
     where
         T: SerializeWithContext<C>,
@@ -130,15 +161,22 @@ where
     }
 }
 
-struct ParquetSerializer {
-    _context: SqlSerdeConfig,
+#[cfg(feature = "with-avro")]
+pub struct AvroSerializer {
+    config: SqlSerdeConfig,
 }
 
-impl BytesSerializer<SqlSerdeConfig> for ParquetSerializer {
-    fn create(_context: SqlSerdeConfig) -> Self {
-        Self { _context }
+#[cfg(feature = "with-avro")]
+impl AvroSerializer {
+    fn create() -> Self {
+        Self {
+            config: avro_serde_config(),
+        }
     }
+}
 
+#[cfg(feature = "with-avro")]
+impl BytesSerializer<SqlSerdeConfig> for AvroSerializer {
     fn serialize<T>(&mut self, _val: &T, _buf: &mut Vec<u8>) -> AnyResult<()>
     where
         T: SerializeWithContext<SqlSerdeConfig>,
@@ -146,12 +184,42 @@ impl BytesSerializer<SqlSerdeConfig> for ParquetSerializer {
         unimplemented!()
     }
 
-    fn serialize_arrow<T>(&mut self, val: &T, builder: &mut ArrowBuilder) -> AnyResult<()>
+    fn serialize_avro<T>(
+        &mut self,
+        val: &T,
+        schema: &AvroSchema,
+    ) -> Result<AvroValue, AvroSerializerError>
     where
-        T: Serialize,
+        T: SerializeWithContext<SqlSerdeConfig>,
+    {
+        val.serialize_with_context(AvroSchemaSerializer::new(schema), &self.config)
+    }
+}
+
+struct ParquetSerializer {
+    context: SqlSerdeConfig,
+}
+
+impl ParquetSerializer {
+    fn create(context: SqlSerdeConfig) -> Self {
+        Self { context }
+    }
+}
+
+impl BytesSerializer<SqlSerdeConfig> for ParquetSerializer {
+    fn serialize<T>(&mut self, _val: &T, _buf: &mut Vec<u8>) -> AnyResult<()>
+    where
+        T: SerializeWithContext<SqlSerdeConfig>,
+    {
+        unimplemented!()
+    }
+
+    fn serialize_arrow<T>(&mut self, val: &T, builder: &mut ArrayBuilder) -> AnyResult<()>
+    where
+        T: SerializeWithContext<SqlSerdeConfig>,
     {
         //let fields = Vec::<Field>::from_type::<T>(TracingOptions::default())?;
-        builder.push(val)?;
+        builder.push(&SerializeWithContextWrapper::new(val, &self.context))?;
         Ok(())
     }
 }
@@ -271,7 +339,7 @@ where
             RecordFormat::Csv => {
                 Box::new(<SerCursorImpl<'a, CsvSerializer<_>, B, KD, VD, _>>::new(
                     &self.batch,
-                    SqlSerdeConfig::default(),
+                    CsvSerializer::create(SqlSerdeConfig::default()),
                 ))
             }
             RecordFormat::Json(json_flavor) => {
@@ -283,9 +351,11 @@ where
                     KD,
                     VD,
                     SqlSerdeConfig,
-                >>::new(&self.batch, config))
+                >>::new(
+                    &self.batch, JsonSerializer::create(config)
+                ))
             }
-            RecordFormat::Parquet(schema) => Box::new(<SerCursorImpl<
+            RecordFormat::Parquet(_schema) => Box::new(<SerCursorImpl<
                 'a,
                 ParquetSerializer,
                 B,
@@ -294,8 +364,24 @@ where
                 SqlSerdeConfig,
             >>::new(
                 &self.batch,
-                SqlSerdeConfig::from_schema(schema),
+                ParquetSerializer::create(
+                    SqlSerdeConfig::default()
+                        .with_date_format(DateFormat::String("%Y-%m-%d"))
+                        .with_time_format(TimeFormat::Nanos)
+                        // DeltaLake only supports microsecond-based timestamp encoding, so we just
+                        // hardwire that for now.  See also `format/parquet/mod.rs`.
+                        .with_timestamp_format(TimestampFormat::MicrosSinceEpoch),
+                ),
             )),
+            #[cfg(feature = "with-avro")]
+            RecordFormat::Avro => {
+                Box::new(
+                    <SerCursorImpl<'a, AvroSerializer, B, KD, VD, SqlSerdeConfig>>::new(
+                        &self.batch,
+                        AvroSerializer::create(),
+                    ),
+                )
+            }
         })
     }
 }
@@ -332,8 +418,8 @@ where
         ))))
     }
 
-    fn into_trace(self: Arc<Self>, persistent_id: &str) -> Box<dyn SerTrace> {
-        let mut spine = TypedBatch::new(DynSpine::<B::Inner>::new(&B::factories(), persistent_id));
+    fn into_trace(self: Arc<Self>) -> Box<dyn SerTrace> {
+        let mut spine = TypedBatch::new(DynSpine::<B::Inner>::new(&B::factories()));
         spine.insert(Arc::unwrap_or_clone(self).batch.into_inner());
         Box::new(SerBatchImpl::<Spine<B>, KD, VD>::new(spine))
     }
@@ -390,12 +476,12 @@ where
     KD: From<B::Key> + SerializeWithContext<C>,
     VD: From<B::Val> + SerializeWithContext<C>,
 {
-    pub fn new(batch: &'a B, config: C) -> Self {
+    pub fn new(batch: &'a B, serializer: Ser) -> Self {
         let cursor = batch.inner().cursor();
 
         let mut result = Self {
             cursor,
-            serializer: Ser::create(config),
+            serializer,
             key: None,
             val: None,
             phantom: PhantomData,
@@ -468,9 +554,16 @@ where
         self.serializer.serialize(self.key.as_ref().unwrap(), dst)
     }
 
-    fn serialize_key_to_arrow(&mut self, dst: &mut ArrowBuilder) -> AnyResult<()> {
+    fn serialize_key_to_arrow(&mut self, dst: &mut ArrayBuilder) -> AnyResult<()> {
         self.serializer
             .serialize_arrow(self.key.as_ref().unwrap(), dst)
+    }
+
+    #[cfg(feature = "with-avro")]
+    fn key_to_avro(&mut self, schema: &AvroSchema) -> AnyResult<AvroValue> {
+        Ok(self
+            .serializer
+            .serialize_avro(self.key.as_ref().unwrap(), schema)?)
     }
 
     fn serialize_key_weight(&mut self, dst: &mut Vec<u8>) -> AnyResult<()> {
@@ -481,6 +574,13 @@ where
 
     fn serialize_val(&mut self, dst: &mut Vec<u8>) -> AnyResult<()> {
         self.serializer.serialize(self.val.as_ref().unwrap(), dst)
+    }
+
+    #[cfg(feature = "with-avro")]
+    fn val_to_avro(&mut self, schema: &AvroSchema) -> AnyResult<AvroValue> {
+        Ok(self
+            .serializer
+            .serialize_avro(self.val.as_ref().unwrap(), schema)?)
     }
 
     fn weight(&mut self) -> i64 {

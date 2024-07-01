@@ -1,7 +1,7 @@
 package org.dbsp.sqlCompiler.ir.expression;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeFunction;
@@ -27,7 +27,8 @@ public abstract class DBSPApplyBaseExpression extends DBSPExpression {
                 throw new InternalCompilerError("Null arg", this);
             }
             assert parameterTypes == null || parameterTypes[index].sameType(arg.getType()) :
-                    "Argument " + arg + " does not match parameter type " + parameterTypes[index];
+                    "Argument " + arg + " type " +
+                    arg.getType() + " does not match parameter type " + parameterTypes[index];
             index++;
         }
     }

@@ -20,9 +20,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use deadpool_postgres::Transaction;
 use openssl::sha::{self};
+use pipeline_types::config::{ConnectorConfig, TransportConfigVariant};
 use pipeline_types::service::{KafkaService, ServiceConfig};
 use pipeline_types::{
-    config::{ConnectorConfig, ResourceConfig, RuntimeConfig},
+    config::{ResourceConfig, RuntimeConfig},
     program_schema::Relation,
 };
 use pretty_assertions::assert_eq;
@@ -200,7 +201,7 @@ async fn program_creation() {
             "program desc",
             "ignored",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -216,7 +217,7 @@ async fn program_creation() {
         schema: None,
         code: None,
         config: ProgramConfig {
-            profile: CompilationProfile::Unoptimized,
+            profile: Some(CompilationProfile::Unoptimized),
         },
     };
     let actual = rows.get(0).unwrap();
@@ -233,7 +234,7 @@ async fn program_creation() {
         schema: None,
         code: Some("ignored".to_string()),
         config: ProgramConfig {
-            profile: CompilationProfile::Unoptimized,
+            profile: Some(CompilationProfile::Unoptimized),
         },
     };
     let actual = rows.get(0).unwrap();
@@ -250,7 +251,7 @@ async fn program_creation() {
         schema: None,
         code: None,
         config: ProgramConfig {
-            profile: CompilationProfile::Unoptimized,
+            profile: Some(CompilationProfile::Unoptimized),
         },
     };
     let (_, actual) = rows.get(0).unwrap();
@@ -271,7 +272,7 @@ async fn duplicate_program() {
             "program desc",
             "ignored",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -285,7 +286,7 @@ async fn duplicate_program() {
             "program desc",
             "ignored",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -308,7 +309,7 @@ async fn program_code() {
             "program desc",
             "create table t1(c1 integer);",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -340,7 +341,7 @@ async fn update_program() {
             "program desc",
             "create table t1(c1 integer);",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -405,7 +406,7 @@ async fn program_queries() {
             "program desc",
             "create table t1(c1 integer);",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -493,7 +494,7 @@ async fn project_pending() {
             "project desc",
             "ignored",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -508,7 +509,7 @@ async fn project_pending() {
             "project desc",
             "ignored",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -546,7 +547,7 @@ async fn update_status() {
             "program desc",
             "create table t1(c1 integer);",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -787,7 +788,7 @@ async fn versioning_no_change_no_connectors() {
             "",
             "",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -844,7 +845,7 @@ async fn versioning() {
             "program desc",
             "only schema matters--this isn't compiled",
             &ProgramConfig {
-                profile: CompilationProfile::Unoptimized,
+                profile: Some(CompilationProfile::Unoptimized),
             },
             None,
         )
@@ -861,17 +862,16 @@ async fn versioning() {
             tenant_id,
             program_id,
             ProgramSchema {
-                inputs: vec![Relation::new("t1", false, vec![])],
-                outputs: vec![Relation::new("v1", false, vec![])],
+                inputs: vec![Relation::new("t1", false, vec![], false)],
+                outputs: vec![Relation::new("v1", false, vec![], false)],
             },
         )
         .await
         .unwrap();
     let config1 = test_connector_config();
-    let config2 = ConnectorConfig {
-        max_buffered_records: config1.clone().max_buffered_records + 5,
-        ..config1.clone()
-    };
+    let mut config2 = config1.clone();
+    config2.max_queued_records = config1.max_queued_records + 5;
+
     let connector_id1: ConnectorId = handle
         .db
         .new_connector(tenant_id, Uuid::now_v7(), "a", "b", &config1, None)
@@ -941,10 +941,10 @@ async fn versioning() {
             program_id,
             ProgramSchema {
                 inputs: vec![
-                    Relation::new("t1", false, vec![]),
-                    Relation::new("t2", false, vec![]),
+                    Relation::new("t1", false, vec![], false),
+                    Relation::new("t2", false, vec![], false),
                 ],
-                outputs: vec![Relation::new("v1", false, vec![])],
+                outputs: vec![Relation::new("v1", false, vec![], false)],
             },
         )
         .await
@@ -963,8 +963,8 @@ async fn versioning() {
             tenant_id,
             program_id,
             ProgramSchema {
-                inputs: vec![Relation::new("tnew1", false, vec![])],
-                outputs: vec![Relation::new("vnew1", false, vec![])],
+                inputs: vec![Relation::new("tnew1", false, vec![], false)],
+                outputs: vec![Relation::new("vnew1", false, vec![], false)],
             },
         )
         .await
@@ -980,9 +980,12 @@ async fn versioning() {
     let gp_config = RuntimeConfig {
         workers: 1,
         cpu_profiler: true,
+        storage: false,
+        tcp_metrics_exporter: false,
         min_batch_size_records: 0,
         max_buffering_delay_usecs: 0,
         resources: ResourceConfig::default(),
+        min_storage_rows: None,
     };
     handle
         .db
@@ -1027,10 +1030,8 @@ async fn versioning() {
     assert_ne!(r2, r3, "we got a new revision");
 
     // If we change the connector we can commit again:
-    let config3 = ConnectorConfig {
-        max_buffered_records: config2.max_buffered_records + 5,
-        ..config2
-    };
+    let mut config3 = config2.clone();
+    config3.max_queued_records += 5;
     handle
         .db
         .update_connector(
@@ -1279,6 +1280,7 @@ pub(crate) fn runtime_config() -> impl Strategy<Value = RuntimeConfig> {
         bool,
         u64,
         u64,
+        bool,
         Option<u64>,
         Option<u64>,
         Option<u64>,
@@ -1290,13 +1292,17 @@ pub(crate) fn runtime_config() -> impl Strategy<Value = RuntimeConfig> {
         cpu_profiler: config.1,
         min_batch_size_records: config.2,
         max_buffering_delay_usecs: config.3,
+        storage: config.4,
+        tcp_metrics_exporter: false,
         resources: ResourceConfig {
-            cpu_cores_min: config.4,
-            cpu_cores_max: config.5,
-            memory_mb_min: config.6,
-            memory_mb_max: config.7,
-            storage_mb_max: config.8,
+            cpu_cores_min: config.5,
+            cpu_cores_max: config.6,
+            memory_mb_min: config.7,
+            memory_mb_max: config.8,
+            storage_mb_max: config.9,
+            storage_class: None,
         },
+        min_storage_rows: None,
     })
 }
 
@@ -1308,6 +1314,7 @@ pub(crate) fn option_runtime_config() -> impl Strategy<Value = Option<RuntimeCon
             bool,
             u64,
             u64,
+            bool,
             Option<u64>,
             Option<u64>,
             Option<u64>,
@@ -1321,36 +1328,48 @@ pub(crate) fn option_runtime_config() -> impl Strategy<Value = Option<RuntimeCon
             cpu_profiler: config.1,
             min_batch_size_records: config.2,
             max_buffering_delay_usecs: config.3,
+            storage: config.4,
+            tcp_metrics_exporter: false,
             resources: ResourceConfig {
-                cpu_cores_min: config.4,
-                cpu_cores_max: config.5,
-                memory_mb_min: config.6,
-                memory_mb_max: config.7,
-                storage_mb_max: config.8,
+                cpu_cores_min: config.5,
+                cpu_cores_max: config.6,
+                memory_mb_min: config.7,
+                memory_mb_max: config.8,
+                storage_mb_max: config.9,
+                storage_class: None,
             },
+            min_storage_rows: None,
         })
     })
 }
 
 /// Generate different program configurations
 pub(crate) fn program_config() -> impl Strategy<Value = ProgramConfig> {
-    any::<(bool,)>().prop_map(|config| ProgramConfig {
+    any::<(bool, bool)>().prop_map(|config| ProgramConfig {
         profile: if config.0 {
-            CompilationProfile::Unoptimized
+            None
         } else {
-            CompilationProfile::Optimized
+            if config.1 {
+                Some(CompilationProfile::Unoptimized)
+            } else {
+                Some(CompilationProfile::Optimized)
+            }
         },
     })
 }
 
 /// Generate different program configurations
 pub(crate) fn option_program_config() -> impl Strategy<Value = Option<ProgramConfig>> {
-    any::<Option<(bool,)>>().prop_map(|c| {
+    any::<Option<(bool, bool)>>().prop_map(|c| {
         c.map(|config| ProgramConfig {
             profile: if config.0 {
-                CompilationProfile::Unoptimized
+                None
             } else {
-                CompilationProfile::Optimized
+                if config.1 {
+                    Some(CompilationProfile::Unoptimized)
+                } else {
+                    Some(CompilationProfile::Optimized)
+                }
             },
         })
     })
@@ -2110,6 +2129,13 @@ impl Storage for Mutex<DbModel> {
             .ok_or(DBError::UnknownProgram { program_id })?;
         let program_descr = program_descr.clone();
 
+        let (program, _) = s.programs.get(&(tenant_id, program_id)).unwrap();
+        if guard.is_some_and(|g| g.0 != program.version.0) {
+            return Err(DBError::OutdatedProgramVersion {
+                latest_version: program.version,
+            });
+        }
+
         if s.programs
             .iter()
             .filter(|k| k.0 .0 == tenant_id)
@@ -2119,13 +2145,6 @@ impl Storage for Mutex<DbModel> {
             })
         {
             return Err(DBError::DuplicateName);
-        }
-
-        let (program, _) = s.programs.get(&(tenant_id, program_id)).unwrap();
-        if guard.is_some_and(|g| g.0 != program.version.0) {
-            return Err(DBError::OutdatedProgramVersion {
-                latest_version: program.version,
-            });
         }
 
         // This is an artifact of the test code. In the database,
@@ -2343,58 +2362,69 @@ impl Storage for Mutex<DbModel> {
                 })
                 .cloned()
                 .collect::<Vec<ConnectorDescr>>();
+            let mut services_for_connectors = vec![];
+            for connector in &connectors {
+                services_for_connectors.push(
+                    s.services
+                        .values()
+                        .filter(|s| {
+                            connector
+                                .config
+                                .transport
+                                .service_names()
+                                .iter()
+                                .any(|attached_service_name| *attached_service_name == s.name)
+                        })
+                        .cloned()
+                        .collect::<Vec<ServiceDescr>>(),
+                );
+            }
 
             let pipeline = pipeline.descriptor.clone();
             let connectors = connectors.clone();
+            let services_for_connectors = services_for_connectors.clone();
             let program_data = program_data.clone();
 
             // Gives an answer if the relevant configuration state for the
             // pipeline has changed since our last commit.
-            fn detect_changes(
-                cur_pipeline: &PipelineDescr,
-                cur_sql: &str,
-                cur_connectors: &Vec<ConnectorDescr>,
-                prev: &PipelineRevision,
-            ) -> bool {
-                cur_sql != &prev.program.code.clone().unwrap()
-                    || cur_pipeline.config != prev.pipeline.config
-                    || cur_pipeline
-                        .attached_connectors
-                        .iter()
-                        .map(|ac| (&ac.name, ac.is_input, &ac.relation_name))
-                        .ne(prev
-                            .pipeline
-                            .attached_connectors
-                            .iter()
-                            .map(|ach| (&ach.name, ach.is_input, &ach.relation_name)))
-                    || cur_connectors
-                        .iter()
-                        .map(|c| &c.config)
-                        .ne(prev.connectors.iter().map(|c| &c.config))
-            }
-
             let prev = s.history.get(&(tenant_id, pipeline_id));
             let (has_changed, next_revision) = match prev {
-                Some(prev) => (
-                    detect_changes(
-                        &pipeline,
-                        &program_data.0.code.clone().unwrap(),
-                        &connectors,
-                        prev,
-                    ),
-                    prev.revision,
-                ),
+                Some(prev_revision) => {
+                    // TODO: the revision ID is taken into account when doing the comparison,
+                    //       which means that it will always differ
+                    let new_revision = PipelineRevision::new(
+                        Revision(new_revision_id),
+                        pipeline.clone(),
+                        connectors.clone(),
+                        services_for_connectors.clone(),
+                        program_data.0.clone(),
+                    );
+                    let prev_serialized = serde_json::to_string(&prev_revision).unwrap();
+                    let new_serialized = serde_json::to_string(&new_revision).unwrap();
+                    let detected_changes = prev_serialized != new_serialized;
+                    if detected_changes {
+                        (detected_changes, Revision(new_revision_id))
+                    } else {
+                        (detected_changes, prev_revision.revision)
+                    }
+                }
                 None => (true, Revision(new_revision_id)),
             };
 
             if has_changed {
-                PipelineRevision::validate(&pipeline, &connectors, &program_data.0)?;
+                PipelineRevision::validate(
+                    &pipeline,
+                    &connectors,
+                    &services_for_connectors,
+                    &program_data.0,
+                )?;
                 s.history.insert(
                     (tenant_id, pipeline_id),
                     PipelineRevision::new(
                         next_revision,
                         pipeline,
                         connectors,
+                        services_for_connectors,
                         program_data.0.clone(),
                     ),
                 );
@@ -2841,6 +2871,20 @@ impl Storage for Mutex<DbModel> {
             }
         }
 
+        // Each service of the connector must exist
+        if let Some(config) = config {
+            for attached_service_name in config.transport.service_names() {
+                s.services
+                    .iter()
+                    .filter(|k| k.0 .0 == tenant_id)
+                    .map(|k| k.1.clone())
+                    .find(|c| c.name == *attached_service_name)
+                    .ok_or(DBError::UnknownName {
+                        name: attached_service_name.clone(),
+                    })?;
+            }
+        }
+
         let c = s
             .connectors
             .get_mut(&(tenant_id, connector_id))
@@ -2853,6 +2897,21 @@ impl Storage for Mutex<DbModel> {
         }
         if let Some(config) = config {
             c.config = config.clone();
+        }
+        // Change the connector name for all pipelines that have it attached
+        if let Some(name) = connector_name {
+            s.pipelines.values_mut().for_each(|pipeline| {
+                for ac in &mut pipeline.descriptor.attached_connectors {
+                    if ac.connector_name == name.to_string() {
+                        *ac = AttachedConnector {
+                            name: ac.name.clone(),
+                            is_input: ac.is_input,
+                            connector_name: name.to_string(),
+                            relation_name: ac.connector_name.clone(),
+                        };
+                    }
+                }
+            });
         }
         Ok(())
     }
@@ -3137,7 +3196,7 @@ impl Storage for Mutex<DbModel> {
             .get_mut(&(tenant_id, service_id))
             .ok_or(DBError::UnknownService { service_id })?;
         if let Some(name) = name {
-            c.name = name.to_string()
+            c.name = name.to_string();
         }
         if let Some(description) = description {
             c.description = description.to_string()
@@ -3145,6 +3204,16 @@ impl Storage for Mutex<DbModel> {
         if let Some(config) = config {
             c.config = config.clone();
             c.config_type = config.config_type();
+        }
+        // Change the service name for all connectors that have it in their transport
+        if let Some(name) = name {
+            s.connectors.values_mut().for_each(|connector| {
+                for used_service_name in &mut connector.config.transport.service_names() {
+                    if used_service_name == name {
+                        *used_service_name = name.to_string()
+                    }
+                }
+            });
         }
         Ok(())
     }
@@ -3163,6 +3232,34 @@ impl Storage for Mutex<DbModel> {
 
         // Cascade: remove any service probes of the service
         s.service_probes.retain(|_, (_, id)| *id != service_id);
+
+        // Find all connectors which have the service
+        let connectors_with_the_service: Vec<ConnectorDescr> = s
+            .connectors
+            .iter()
+            .filter(|k| {
+                k.1.config
+                    .transport
+                    .service_names()
+                    .contains(&service_name.to_string())
+            })
+            .map(|k| k.1.clone())
+            .collect();
+
+        for connector_descr in connectors_with_the_service {
+            // Remove connector from all the pipelines
+            s.pipelines.values_mut().for_each(|c| {
+                c.descriptor
+                    .attached_connectors
+                    .retain(|c| c.name != connector_descr.name);
+            });
+            // Remove connector
+            s.connectors
+                .remove(&(tenant_id, connector_descr.connector_id))
+                .ok_or(DBError::UnknownConnector {
+                    connector_id: connector_descr.connector_id,
+                })?;
+        }
 
         // Remove the service
         s.services

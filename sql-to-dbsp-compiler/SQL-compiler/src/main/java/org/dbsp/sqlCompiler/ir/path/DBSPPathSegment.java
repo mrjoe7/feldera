@@ -23,7 +23,7 @@
 
 package org.dbsp.sqlCompiler.ir.path;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.ir.DBSPNode;
 import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
 
@@ -32,4 +32,6 @@ public abstract class DBSPPathSegment extends DBSPNode implements IDBSPInnerNode
     protected DBSPPathSegment(CalciteObject node) {
         super(node);
     }
+
+    public abstract boolean equivalent(DBSPPathSegment component);
 }

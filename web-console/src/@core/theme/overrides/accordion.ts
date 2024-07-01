@@ -1,3 +1,4 @@
+import { hexToRGBA } from '@core/utils/hex-to-rgba'
 import { Theme } from '@mui/material/styles'
 
 const Accordion = (theme: Theme) => {
@@ -6,7 +7,7 @@ const Accordion = (theme: Theme) => {
       styleOverrides: {
         root: {
           '&.Mui-disabled': {
-            backgroundColor: `rgba(${theme.palette.customColors.main}, 0.12)`
+            backgroundColor: hexToRGBA(theme.palette.customColors.main, 0.12)
           },
           '&.Mui-expanded': {
             boxShadow: theme.shadows[3]

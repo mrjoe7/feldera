@@ -6,9 +6,12 @@ use crate::{
     },
     declare_trait_object,
     dynamic::{Data, DataTrait, DynDataTyped, DynPair, Erase},
-    trace::{Batch, BatchFactories, BatchReader, BatchReaderFactories, Builder, Cursor, Spine},
+    trace::{
+        ord::fallback::indexed_wset::{FallbackIndexedWSet, FallbackIndexedWSetFactories},
+        Batch, BatchFactories, BatchReader, BatchReaderFactories, Builder, Cursor, Spine,
+    },
     utils::Tup2,
-    Circuit, DBData, NumEntries, RootCircuit, Stream, ZWeight,
+    Circuit, DBData, DynZWeight, NumEntries, RootCircuit, Stream, ZWeight,
 };
 use rkyv::Archive;
 use serde::{Deserialize, Serialize};
@@ -183,6 +186,7 @@ pub type NeighborhoodDescrStream<K, V> =
 pub struct NeighborhoodFactories<B: IndexedZSetReader> {
     input_factories: B::Factories,
     local_factories: OrdIndexedZSetFactories<B::Key, B::Val>,
+    stored_factories: FallbackIndexedWSetFactories<B::Key, B::Val, DynZWeight>,
     output_factories: <DynNeighborhood<B::Key, B::Val> as BatchReader>::Factories,
 }
 
@@ -198,6 +202,7 @@ where
         Self {
             input_factories: BatchReaderFactories::new::<KType, VType, ZWeight>(),
             local_factories: BatchReaderFactories::new::<KType, VType, ZWeight>(),
+            stored_factories: BatchReaderFactories::new::<KType, VType, ZWeight>(),
             output_factories: BatchReaderFactories::new::<Tup2<i64, Tup2<KType, VType>>, (), ZWeight>(
             ),
         }
@@ -271,22 +276,22 @@ where
                     &stream.dyn_integrate_trace(&factories.input_factories),
                     neighborhood_descr,
                 )
-                .differentiate_with_zero(Batch::dyn_empty(&factories.local_factories, ()));
+                .differentiate_with_initial_value(Batch::dyn_empty(&factories.local_factories, ()));
 
             // Gather all results in worker 0.  Worker 0 then computes
             // the final neighborhood.
             // TODO: use different workers for different collections.
             let output = self.circuit().add_binary_operator(
-                NeighborhoodNumbered::<Spine<OrdIndexedZSet<B::Key, B::Val>>>::new(
+                NeighborhoodNumbered::<Spine<FallbackIndexedWSet<B::Key, B::Val, DynZWeight>>>::new(
                     &factories.output_factories,
                 ),
                 &local_output
                     .dyn_gather(&factories.local_factories, 0)
-                    .dyn_integrate_trace(&factories.local_factories),
+                    .dyn_integrate_trace(&factories.stored_factories),
                 neighborhood_descr,
             );
 
-            output.differentiate_with_zero(DynNeighborhood::dyn_empty(
+            output.differentiate_with_initial_value(DynNeighborhood::dyn_empty(
                 &factories.output_factories,
                 (),
             ))
@@ -647,7 +652,7 @@ mod test {
 
                 TestBatch::from_data(output.as_slice())
             } else {
-                TestBatch::new(&TestBatchFactories::new(), "")
+                TestBatch::new(&TestBatchFactories::new())
             }
         }
     }
@@ -909,7 +914,7 @@ mod test {
             let (mut dbsp, (descr_handle, input_handle, output_handle)) =
                 Runtime::init_circuit(4, test_circuit).unwrap();
 
-            let mut ref_trace = TestBatch::new(&TestBatchFactories::new(), "");
+            let mut ref_trace = TestBatch::new(&TestBatchFactories::new());
 
             for (batch, (start_key, start_val), before, after) in trace.into_iter() {
 

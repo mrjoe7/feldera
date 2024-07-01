@@ -91,29 +91,79 @@ use crate::{
     trace::{
         cursor::CursorList, Batch, BatchReader, BatchReaderFactories, Cursor, Filter, Merger, Trace,
     },
-    NumEntries,
+    Error, NumEntries,
 };
 
-use crate::dynamic::ClonableTrait;
+use crate::dynamic::{ClonableTrait, DeserializableDyn};
+use crate::storage::backend::metrics::{COMPACTION_DURATION, COMPACTION_SIZE, TOTAL_COMPACTIONS};
+use crate::storage::file::to_bytes;
+use crate::storage::{checkpoint_path, write_commit_metadata};
+use metrics::{counter, histogram};
 use rand::Rng;
 use rkyv::{ser::Serializer, Archive, Archived, Deserialize, Fallible, Serialize};
 use size_of::SizeOf;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 use std::{
     fmt::{self, Debug, Display, Formatter, Write},
+    fs,
     mem::replace,
     ops::DerefMut,
 };
 use textwrap::indent;
+use uuid::Uuid;
 
-/// General-purpose [trace][crate::trace::Trace] implementation based on
-/// collection and merging immutable batches of updates.
-///
-/// See [module documentation][crate::trace::spine_fueled] for a description of
-/// the internal data structures.
+/// A spine that is serialized to a file.
+#[derive(rkyv::Serialize, rkyv::Deserialize, rkyv::Archive)]
+pub(crate) struct CommittedSpine<B: Batch + Send + Sync> {
+    pub batches: Vec<String>,
+    pub merged: Vec<(String, String)>,
+    pub lower: Vec<B::Time>,
+    pub upper: Vec<B::Time>,
+    pub effort: u64,
+    pub dirty: bool,
+    pub lower_key_bound: Option<Vec<u8>>,
+}
+
+impl<B: Batch + Send + Sync> From<&Spine<B>> for CommittedSpine<B> {
+    fn from(value: &Spine<B>) -> Self {
+        let mut batches = vec![];
+        value.map_batches(|b| {
+            batches.push(
+                b.persistent_id()
+                    .expect("Persistent spine needs an identifier")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        });
+
+        // Transform the lower key bound into a serialized form and store it as a byte vector.
+        // This is necessary because the key type is not sized.
+        use crate::dynamic::rkyv::SerializeDyn;
+        let lower_key_bound_ser = value.lower_key_bound.as_ref().map(|b| {
+            let mut s: crate::trace::Serializer = crate::trace::Serializer::default();
+            b.serialize(&mut s).unwrap();
+            s.into_serializer().into_inner().to_vec()
+        });
+
+        CommittedSpine {
+            batches,
+            merged: Vec::new(),
+            lower: value.lower.clone().into(),
+            upper: value.upper.clone().into(),
+            effort: value.effort as u64,
+            dirty: value.dirty,
+            lower_key_bound: lower_key_bound_ser,
+        }
+    }
+}
+
+/// General-purpose [trace][crate::trace::Trace] implementation for DRAM based
+/// collections and merging immutable batches of updates.
 #[derive(SizeOf)]
 pub struct Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     #[size_of(skip)]
     factories: B::Factories,
@@ -132,7 +182,7 @@ where
 
 impl<B> Display for Spine<B>
 where
-    B: Batch + Display,
+    B: Batch + Send + Sync + Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.try_fold_batches((), |_, batch| {
@@ -143,7 +193,7 @@ where
 
 impl<B> Debug for Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         let mut cursor = self.cursor();
@@ -169,7 +219,7 @@ where
 // TODO.
 impl<B> Clone for Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     fn clone(&self) -> Self {
         unimplemented!()
@@ -178,7 +228,7 @@ where
 
 impl<B> Archive for Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     type Archived = ();
     type Resolver = ();
@@ -188,13 +238,13 @@ where
     }
 }
 
-impl<B: Batch, S: Serializer + ?Sized> Serialize<S> for Spine<B> {
+impl<B: Batch + Send + Sync, S: Serializer + ?Sized> Serialize<S> for Spine<B> {
     fn serialize(&self, _serializer: &mut S) -> Result<Self::Resolver, S::Error> {
         unimplemented!();
     }
 }
 
-impl<B: Batch, D: Fallible> Deserialize<Spine<B>, D> for Archived<Spine<B>> {
+impl<B: Batch + Send + Sync, D: Fallible> Deserialize<Spine<B>, D> for Archived<Spine<B>> {
     fn deserialize(&self, _deserializer: &mut D) -> Result<Spine<B>, D::Error> {
         unimplemented!();
     }
@@ -202,7 +252,7 @@ impl<B: Batch, D: Fallible> Deserialize<Spine<B>, D> for Archived<Spine<B>> {
 
 impl<B> NumEntries for Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     const CONST_NUM_ENTRIES: Option<usize> = None;
 
@@ -217,7 +267,7 @@ where
 
 impl<B> BatchReader for Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     type Key = B::Key;
     type Val = B::Val;
@@ -252,7 +302,7 @@ where
         let mut cursors = Vec::with_capacity(self.merging.len());
         for merge_state in self.merging.iter().rev() {
             match merge_state {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
                     if !batch1.is_empty() {
                         cursors.push(batch1.cursor());
                     }
@@ -352,7 +402,7 @@ where
 
 impl<B> Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     /// Display the structure of the spine, including the type of each bin and
     /// the sizes of batches.
@@ -361,7 +411,7 @@ where
 
         for batch in self.merging.iter() {
             match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
                     s.write_fmt(format_args!(
                         "[{}+{}],",
                         batch1.num_entries_deep(),
@@ -399,7 +449,7 @@ where
     {
         for batch in self.merging.iter().rev() {
             match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
                     map(batch1);
                     map(batch2);
                 }
@@ -418,7 +468,7 @@ where
             .iter()
             .rev()
             .fold(init, |acc, batch| match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
                     let acc = fold(acc, batch1);
                     fold(acc, batch2)
                 }
@@ -437,7 +487,7 @@ where
             .iter()
             .rev()
             .try_fold(init, |acc, batch| match batch {
-                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
+                MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
                     let acc = fold(acc, batch1)?;
                     fold(acc, batch2)
                 }
@@ -446,14 +496,36 @@ where
                 _ => Ok(acc),
             })
     }
+
+    /// Return the absolute path of the file for this Spine checkpoint.
+    ///
+    /// # Arguments
+    /// - `cid`: The checkpoint id.
+    /// - `persistent_id`: The persistent id that identifies the spine within
+    ///   the circuit for a given checkpoint.
+    fn checkpoint_file<P: AsRef<str>>(cid: Uuid, persistent_id: P) -> PathBuf {
+        let mut path = checkpoint_path(cid);
+        path.push(format!("pspine-{}.dat", persistent_id.as_ref()));
+        path
+    }
+
+    /// Return the absolute path of the file for this Spine's batchlist.
+    ///
+    /// # Arguments
+    /// - `sid`: The step id of the checkpoint.
+    fn batchlist_file<P: AsRef<str>>(&self, cid: Uuid, persistent_id: P) -> PathBuf {
+        let mut path = checkpoint_path(cid);
+        path.push(format!("pspine-batches-{}.dat", persistent_id.as_ref()));
+        path
+    }
 }
 
-pub struct SpineCursor<'s, B: Batch + 's> {
+pub struct SpineCursor<'s, B: Batch + Send + Sync + 's> {
     #[allow(clippy::type_complexity)]
     cursor: CursorList<B::Key, B::Val, B::Time, B::R, B::Cursor<'s>>,
 }
 
-impl<'s, B: Batch + 's> Clone for SpineCursor<'s, B> {
+impl<'s, B: Batch + Send + Sync + 's> Clone for SpineCursor<'s, B> {
     fn clone(&self) -> Self {
         Self {
             cursor: self.cursor.clone(),
@@ -461,7 +533,7 @@ impl<'s, B: Batch + 's> Clone for SpineCursor<'s, B> {
     }
 }
 
-impl<'s, B: Batch> SpineCursor<'s, B> {
+impl<'s, B: Batch + Send + Sync> SpineCursor<'s, B> {
     fn new(factories: &B::Factories, cursors: Vec<B::Cursor<'s>>) -> Self {
         Self {
             cursor: CursorList::new(factories.weight_factory(), cursors),
@@ -469,7 +541,7 @@ impl<'s, B: Batch> SpineCursor<'s, B> {
     }
 }
 
-impl<'s, B: Batch> Cursor<B::Key, B::Val, B::Time, B::R> for SpineCursor<'s, B> {
+impl<'s, B: Batch + Send + Sync> Cursor<B::Key, B::Val, B::Time, B::R> for SpineCursor<'s, B> {
     // fn key_vtable(&self) -> &'static VTable<B::Key> {
     //     self.cursor.key_vtable()
     // }
@@ -587,11 +659,11 @@ impl<'s, B: Batch> Cursor<B::Key, B::Val, B::Time, B::R> for SpineCursor<'s, B> 
 
 impl<B> Trace for Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     type Batch = B;
 
-    fn new<S: AsRef<str>>(factories: &B::Factories, _persistent_id: S) -> Self {
+    fn new(factories: &B::Factories) -> Self {
         Self::with_effort(factories, 1)
     }
 
@@ -631,7 +703,7 @@ where
 
     fn consolidate(mut self) -> Option<B> {
         // Merge batches until there is nothing left to merge.
-        let mut fuel = isize::max_value();
+        let mut fuel = isize::MAX;
         while !self.reduced() {
             self.exert(&mut fuel);
         }
@@ -705,11 +777,57 @@ where
     fn value_filter(&self) -> &Option<Filter<Self::Val>> {
         &self.value_filter
     }
+
+    fn commit<P: AsRef<str>>(&self, cid: Uuid, persistent_id: P) -> Result<(), Error> {
+        let committed: CommittedSpine<B> = self.into();
+        let as_bytes = to_bytes(&committed).expect("Serializing CommittedSpine should work.");
+        write_commit_metadata(
+            Self::checkpoint_file(cid, &persistent_id),
+            as_bytes.as_slice(),
+        )?;
+
+        // Write the batches as a separate file, this allows to parse it
+        // in `Checkpointer` without the need to know the exact Spine type.
+        let batches = committed.batches;
+        let as_bytes = to_bytes(&batches).expect("Serializing batches to Vec<String> should work.");
+        write_commit_metadata(
+            self.batchlist_file(cid, &persistent_id),
+            as_bytes.as_slice(),
+        )?;
+
+        Ok(())
+    }
+
+    fn restore<P: AsRef<str>>(&mut self, cid: Uuid, persistent_id: P) -> Result<(), Error> {
+        let pspine_path = Self::checkpoint_file(cid, persistent_id);
+        let content = fs::read(pspine_path)?;
+        let archived = unsafe { rkyv::archived_root::<CommittedSpine<B>>(&content) };
+
+        let committed: CommittedSpine<B> = archived.deserialize(&mut rkyv::Infallible).unwrap();
+        self.lower = Antichain::from(committed.lower);
+        self.upper = Antichain::from(committed.upper);
+        self.effort = committed.effort as usize;
+        self.dirty = committed.dirty;
+        if let Some(bytes) = committed.lower_key_bound {
+            let mut default_box = self.factories.key_factory().default_box();
+            unsafe { default_box.deserialize_from_bytes(&bytes, 0) };
+            self.lower_key_bound = Some(default_box);
+        }
+        self.key_filter = None;
+        self.value_filter = None;
+        for batch in committed.batches {
+            let batch = B::from_path(&self.factories.clone(), Path::new(batch.as_str()))
+                .expect("Batch file for checkpoint must exist.");
+            self.insert(batch);
+        }
+
+        Ok(())
+    }
 }
 
 impl<B> Spine<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     #[inline]
     fn key_factory(&self) -> &'static dyn Factory<B::Key> {
@@ -1032,7 +1150,7 @@ where
     fn complete_merges(&mut self) {
         for merge_state in self.merging.iter_mut() {
             if merge_state.is_inprogress() {
-                let mut fuel = isize::max_value();
+                let mut fuel = isize::MAX;
                 merge_state.work(&self.key_filter, &self.value_filter, &mut fuel);
             }
         }
@@ -1044,7 +1162,7 @@ where
     fn map_batches_mut<F: FnMut(&mut <Self as Trace>::Batch)>(&mut self, mut f: F) {
         for batch in self.merging.iter_mut().rev() {
             match batch {
-                MergeState::Double(MergeVariant::InProgress(_batch1, _batch2, _)) => {
+                MergeState::Double(MergeVariant::InProgress(_batch1, _batch2, _, _)) => {
                     panic!("map_batches_mut called on an in-progress batch")
                 }
                 MergeState::Double(MergeVariant::Complete(Some(batch))) => {
@@ -1066,7 +1184,7 @@ where
 #[derive(SizeOf)]
 pub enum MergeState<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     /// An empty layer, containing no updates.
     Vacant,
@@ -1081,13 +1199,13 @@ where
 
 impl<B> MergeState<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
         match self {
             MergeState::Single(Some(b)) => b.len(),
-            MergeState::Double(MergeVariant::InProgress(b1, b2, _)) => b1.len() + b2.len(),
+            MergeState::Double(MergeVariant::InProgress(b1, b2, _, _)) => b1.len() + b2.len(),
             MergeState::Double(MergeVariant::Complete(Some(b))) => b.len(),
             _ => 0,
         }
@@ -1176,9 +1294,10 @@ where
             (Some(batch1), Some(batch2)) => {
                 // Leonid: we do not require batch bounds to grow monotonically.
                 //assert!(batch1.upper() == batch2.lower());
-
+                let start = Instant::now();
+                counter!(TOTAL_COMPACTIONS).increment(1);
                 let begin_merge = <B as Batch>::begin_merge(&batch1, &batch2);
-                MergeVariant::InProgress(batch1, batch2, begin_merge)
+                MergeVariant::InProgress(batch1, batch2, begin_merge, start)
             }
             (batch @ Some(_), None) | (None, batch @ Some(_)) => MergeVariant::Complete(batch),
             (None, None) => MergeVariant::Complete(None),
@@ -1190,7 +1309,7 @@ where
 
 impl<B> Debug for MergeState<B>
 where
-    B: Batch + Debug,
+    B: Batch + Send + Sync + Debug,
     B::Merger: Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1205,10 +1324,10 @@ where
 #[derive(SizeOf)]
 pub enum MergeVariant<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     /// Describes an actual in-progress merge between two non-trivial batches.
-    InProgress(B, B, <B as Batch>::Merger),
+    InProgress(B, B, <B as Batch>::Merger, Instant),
     /// A merge that requires no further work. May or may not represent a
     /// non-trivial batch.
     Complete(Option<B>),
@@ -1216,7 +1335,7 @@ where
 
 impl<B> MergeVariant<B>
 where
-    B: Batch,
+    B: Batch + Send + Sync,
 {
     /// Completes and extracts the batch, unless structurally empty.
     ///
@@ -1227,7 +1346,7 @@ where
         key_filter: &Option<Filter<B::Key>>,
         value_filter: &Option<Filter<B::Val>>,
     ) -> Option<B> {
-        let mut fuel = isize::max_value();
+        let mut fuel = isize::MAX;
         self.work(key_filter, value_filter, &mut fuel);
         if let MergeVariant::Complete(batch) = self {
             batch
@@ -1247,12 +1366,15 @@ where
         fuel: &mut isize,
     ) {
         let variant = replace(self, MergeVariant::Complete(None));
-        if let MergeVariant::InProgress(b1, b2, mut merge) = variant {
+        if let MergeVariant::InProgress(b1, b2, mut merge, start) = variant {
             merge.work(&b1, &b2, key_filter, value_filter, fuel);
             if *fuel > 0 {
-                *self = MergeVariant::Complete(Some(merge.done()));
+                let merged = merge.done();
+                histogram!(COMPACTION_SIZE).record(merged.len() as f64);
+                histogram!(COMPACTION_DURATION).record(start.elapsed().as_secs_f64());
+                *self = MergeVariant::Complete(Some(merged));
             } else {
-                *self = MergeVariant::InProgress(b1, b2, merge);
+                *self = MergeVariant::InProgress(b1, b2, merge, start);
             }
         } else {
             *self = variant;
@@ -1262,12 +1384,12 @@ where
 
 impl<B> Debug for MergeVariant<B>
 where
-    B: Batch + Debug,
+    B: Batch + Send + Sync + Debug,
     B::Merger: Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InProgress(batch1, batch2, merger) => f
+            Self::InProgress(batch1, batch2, merger, _start) => f
                 .debug_tuple("InProgress")
                 .field(batch1)
                 .field(batch2)

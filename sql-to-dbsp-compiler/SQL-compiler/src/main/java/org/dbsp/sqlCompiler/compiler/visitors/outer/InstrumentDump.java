@@ -7,7 +7,7 @@ import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPVariablePath;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPStringLiteral;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 import org.dbsp.util.Linq;
 
 import java.util.List;
@@ -48,7 +48,7 @@ public class InstrumentDump extends CircuitCloneVisitor {
         DBSPOperator input = operator.withInputs(inputs, false);
         this.addOperator(input);
         DBSPTypeZSet zset = type.to(DBSPTypeZSet.class);
-        DBSPVariablePath row = new DBSPVariablePath("v", zset.elementType.ref());
+        DBSPVariablePath row = new DBSPVariablePath(zset.elementType.ref());
         DBSPExpression dump = new DBSPApplyExpression(operator.getNode(), "dump", zset.elementType,
                 new DBSPStringLiteral(Long.toString(operator.id)), row);
         DBSPExpression function = dump.closure(row.asParameter());

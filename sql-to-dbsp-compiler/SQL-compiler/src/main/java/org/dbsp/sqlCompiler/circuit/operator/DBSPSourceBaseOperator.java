@@ -23,31 +23,27 @@
 
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.util.IIndentStream;
 
 import javax.annotation.Nullable;
 
-/**
- * Base class for source operators.
- */
+/** Base class for source operators. */
 public abstract class DBSPSourceBaseOperator extends DBSPOperator {
     public final String tableName;
 
-    /**
-     * Create a DBSP operator that is a source to the dataflow graph.
-     * @param node        Calcite node for the statement creating the table
-     *                    that this node is created from.
-     * @param isMultiset  True if the source data can be a multiset.
-     * @param outputType  Type of table.
-     * @param comment     A comment describing the operator.
-     * @param tableName   The name of the table that this operator is created from.
-     */
-    public DBSPSourceBaseOperator(
-            CalciteObject node,
-            DBSPType outputType, boolean isMultiset, @Nullable String comment,
-            String tableName) {
+    /** Create a DBSP operator that is a source to the dataflow graph.
+     *
+     * @param node       Calcite node for the statement creating the table
+     *                   that this node is created from.
+     * @param outputType Type of table.
+     * @param isMultiset True if the source data can be a multiset.
+     * @param tableName  The name of the table that this operator is created from.
+     * @param comment    A comment describing the operator. */
+    protected DBSPSourceBaseOperator(
+            CalciteObject node, DBSPType outputType, boolean isMultiset,
+            String tableName, @Nullable String comment) {
         super(node, "source " + tableName, null, outputType, isMultiset, comment);
         this.tableName = tableName;
     }
@@ -64,5 +60,11 @@ public abstract class DBSPSourceBaseOperator extends DBSPOperator {
                 .append(" = ")
                 .append(this.tableName)
                 .append("();");
+    }
+
+    @Override
+    public boolean equivalent(DBSPOperator other) {
+        // A source is never equivalent with another operator
+        return false;
     }
 }

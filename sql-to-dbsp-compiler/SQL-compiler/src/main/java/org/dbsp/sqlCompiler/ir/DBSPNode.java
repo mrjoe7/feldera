@@ -24,7 +24,7 @@
 package org.dbsp.sqlCompiler.ir;
 
 import org.dbsp.sqlCompiler.compiler.errors.SourcePositionRange;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.util.IndentStream;
 import org.dbsp.util.Utilities;
 
@@ -35,17 +35,13 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Base interface for all DBSP nodes.
- */
+/** Base class for all DBSP nodes. */
 public abstract class DBSPNode
         implements IDBSPNode {
     static long crtId = 0;
     public final long id;
 
-    /**
-     * Original query Sql node that produced this node.
-     */
+    /** Original Calcite object node that produced this node. */
     private final
     CalciteObject node;
 
@@ -136,10 +132,8 @@ public abstract class DBSPNode
             log.add(this);
     }
 
-    /**
-     * Do not call this method!
-     * It is only used for testing.
-     */
+    /** Do not call this method!
+     * It is only used for testing. */
     public static void reset() {
         crtId = 0;
     }

@@ -23,7 +23,7 @@
 
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -33,7 +33,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 
-public class DBSPConstantOperator extends DBSPOperator {
+public final class DBSPConstantOperator extends DBSPOperator {
     public DBSPConstantOperator(CalciteObject node, DBSPExpression value, boolean isMultiset) {
         // Notice that we use the 'this.function' field to represent
         // the constant value.  Constants are not ClosureExpressions.

@@ -1,9 +1,7 @@
 package org.dbsp.sqlCompiler.ir.expression;
 
-/**
- * This enum encodes the various opcodes for unary and
- * binary operations used in the IR of the SQL compiler.
- */
+/** This enum encodes the various opcodes for unary and
+ * binary operations used in the IR of the SQL compiler. */
 public enum DBSPOpcode {
     // Unary operations
     WRAP_BOOL("wrap_bool", false),
@@ -16,6 +14,7 @@ public enum DBSPOpcode {
     IS_TRUE("is_true", false),
     IS_NOT_TRUE("is_not_true", false),
     IS_NOT_FALSE("is_not_false", false),
+    TYPEDBOX("TypedBox::new", false),
 
     // Binary operations
     ADD("+", false),
@@ -45,13 +44,20 @@ public enum DBSPOpcode {
     SQL_INDEX("[]", false),
     RUST_INDEX("[]", false),
 
-    // Aggregate operations
+    // Aggregate operations.  These operations
+    // handle NULL values differently from standard
+    // arithmetic operations, following SQL semantics.
     AGG_AND("agg_and", true),
     AGG_OR("agg_or", true),
     AGG_XOR("agg_xor", true),
     AGG_MAX("agg_max", true),
     AGG_MIN("agg_min", true),
-    AGG_ADD("agg_plus", true);
+    AGG_ADD("agg_plus", true),
+    // > used in aggregation, for computing ARG_MAX.
+    // NULL compares in a special way.
+    AGG_GTE("agg_gte", true),
+    AGG_LTE("agg_lte", true)
+    ;
 
     private final String text;
     public final boolean isAggregate;
@@ -67,6 +73,8 @@ public enum DBSPOpcode {
     }
 
     public boolean isComparison() {
+        // Some things like AGG_GTE are not listed as comparisons, since
+        // their return type follows different rules
         return this.equals(LT) || this.equals(GT) || this.equals(LTE)
                 || this.equals(GTE) || this.equals(EQ) || this.equals(NEQ)
                 || this.equals(IS_DISTINCT) || this.equals(IS_NOT_DISTINCT);

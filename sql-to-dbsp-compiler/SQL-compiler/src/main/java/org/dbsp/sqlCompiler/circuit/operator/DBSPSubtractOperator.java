@@ -24,7 +24,7 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -33,11 +33,9 @@ import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import javax.annotation.Nullable;
 import java.util.List;
 
-public class DBSPSubtractOperator extends DBSPOperator {
+public final class DBSPSubtractOperator extends DBSPBinaryOperator {
     public DBSPSubtractOperator(CalciteObject node, DBSPOperator left, DBSPOperator right) {
-        super(node, "minus", null, left.outputType, false);
-        this.addInput(left);
-        this.addInput(right);
+        super(node, "minus", null, left.outputType, false, left, right);
         if (!left.outputType.sameType(right.outputType))
             throw new InternalCompilerError("Inputs do not have the same type " + left.outputType +
                     " and " + right.outputType, this);

@@ -1,13 +1,13 @@
 'use client'
 
+import { HealthClickPopup } from '$lib/components/header/HealthPopup'
 import { useAuth } from '$lib/compositions/auth/useAuth'
 // This is the top bar that decides whether to show the hamburger menu or not it
 import Menu from 'mdi-material-ui/Menu'
-import { Settings } from 'src/@core/context/settingsTypes'
-import ModeToggler from 'src/@core/layouts/components/shared-components/ModeToggler'
-import UserDropdown from 'src/@core/layouts/components/shared-components/UserDropdown'
-import IconLockOpenAlt from '~icons/bx/lock-open-alt'
 
+import { Settings } from '@core/context/settingsTypes'
+import ModeToggler from '@core/layouts/components/shared-components/ModeToggler'
+import UserDropdown from '@core/layouts/components/shared-components/UserDropdown'
 import { Tooltip } from '@mui/material'
 // also has the search bar and the user dropdown and the notification dropdown.
 import Box from '@mui/material/Box'
@@ -37,11 +37,12 @@ const AppBarContent = (props: Props) => {
           className='actions-right'
           sx={{ display: 'flex', alignItems: 'center', mb: 'auto', pointerEvents: 'auto' }}
         >
+          <HealthClickPopup />
           <ModeToggler settings={settings} saveSettings={saveSettings} />
           {auth === 'NoAuth' ? (
             <Tooltip title='No authentication'>
               <IconButton disableRipple data-testid='icon-no-auth' sx={{ width: 40, height: 40 }}>
-                <IconLockOpenAlt />
+                <i className={`bx bx-lock-open-alt`} style={{}} />
               </IconButton>
             </Tooltip>
           ) : (

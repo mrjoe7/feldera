@@ -24,8 +24,9 @@
 package org.dbsp.sqlCompiler.ir.expression;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.IDBSPNode;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
@@ -39,7 +40,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 
-public class DBSPTupleExpression extends DBSPBaseTupleExpression {
+public final class DBSPTupleExpression extends DBSPBaseTupleExpression {
     public final boolean isNull;
 
     public DBSPTupleExpression(CalciteObject object, boolean mayBeNull, DBSPExpression... expressions) {
@@ -49,9 +50,7 @@ public class DBSPTupleExpression extends DBSPBaseTupleExpression {
         this.isNull = false;
     }
 
-    /**
-     * A tuple with value 'null'.
-     */
+    /** A tuple with value 'null'. */
     public DBSPTupleExpression(DBSPTypeTuple type) {
         super(type.getNode(), type);
         this.isNull = true;
@@ -94,9 +93,7 @@ public class DBSPTupleExpression extends DBSPBaseTupleExpression {
         return new DBSPTupleExpression(this.getNode(), fields);
     }
 
-    /**
-     * Cast each element of the tuple to the corresponding type in the destination tuple.
-     */
+    /** Cast each element of the tuple to the corresponding type in the destination tuple. */
     public DBSPTupleExpression pointwiseCast(DBSPTypeTuple destType) {
         if (this.size() != destType.size())
             throw new InternalCompilerError("Cannot cast " + this + " with " + this.size() + " fields "
@@ -142,6 +139,8 @@ public class DBSPTupleExpression extends DBSPBaseTupleExpression {
 
     @Override
     public IIndentStream toString(IIndentStream builder) {
+        if (this.isNull)
+            return builder.append("None");
         return builder.append(DBSPTypeCode.TUPLE.rustName)
                 .append(this.fields.length)
                 .append("::new(")
@@ -166,5 +165,19 @@ public class DBSPTupleExpression extends DBSPBaseTupleExpression {
             return new DBSPTupleExpression(this.getType().to(DBSPTypeTuple.class));
         return new DBSPTupleExpression(this.getNode(), this.getType().mayBeNull,
                 Linq.map(this.fields, DBSPExpression::deepCopy, DBSPExpression.class));
+    }
+
+    @Override
+    public boolean equivalent(EquivalenceContext context, DBSPExpression other) {
+        DBSPTupleExpression otherExpression = other.as(DBSPTupleExpression.class);
+        if (otherExpression == null)
+            return false;
+        return this.isNull == otherExpression.isNull &&
+                context.equivalent(this.fields, otherExpression.fields);
+    }
+
+    @Override
+    public DBSPBaseTupleExpression fromFields(List<DBSPExpression> fields) {
+        return new DBSPTupleExpression(this.getNode(), fields);
     }
 }

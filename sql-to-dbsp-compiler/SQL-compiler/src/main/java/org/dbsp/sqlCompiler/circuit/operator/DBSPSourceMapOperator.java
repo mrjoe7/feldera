@@ -1,45 +1,43 @@
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.InputTableMetadata;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.TableMetadata;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPVariablePath;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeCode;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeOption;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeStruct;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeUser;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * This operator produces an IndexedZSet as a result, indexed on the table keys.
- */
-public class DBSPSourceMapOperator extends DBSPSourceTableOperator {
+/** This operator produces an IndexedZSet as a result, indexed on the table keys. */
+public final class DBSPSourceMapOperator extends DBSPSourceTableOperator {
     public final List<Integer> keyFields;
 
     /**
      * Create a DBSP operator that is a source to the dataflow graph.
      * The table has a primary key, so the data forms a set.
      * The data is represented as an indexed zset, hence the name "MapOperator".
-     * @param node        Calcite node for the statement creating the table
-     *                    that this node is created from.
-     * @param sourceName  Calcite node for the identifier naming the table.
-     * @param outputType  Type of output produced.
-     * @param keyFields   Fields of the input row which compose the key.
-     * @param comment     A comment describing the operator.
-     * @param name        The name of the table that this operator is created from.
+     *
+     * @param node       Calcite node for the statement creating the table
+     *                   that this node is created from.
+     * @param sourceName Calcite node for the identifier naming the table.
+     * @param keyFields  Fields of the input row which compose the key.
+     * @param outputType Type of output produced.
+     * @param name       The name of the table that this operator is created from.
+     * @param comment    A comment describing the operator.
      */
     public DBSPSourceMapOperator(
             CalciteObject node, CalciteObject sourceName, List<Integer> keyFields,
-            DBSPTypeIndexedZSet outputType, DBSPTypeStruct originalRowType, @Nullable String comment,
-            InputTableMetadata metadata, String name) {
-        super(node, sourceName, outputType, originalRowType, false, comment, metadata, name);
+            DBSPTypeIndexedZSet outputType, DBSPTypeStruct originalRowType,
+            TableMetadata metadata, String name, @Nullable String comment) {
+        super(node, sourceName, outputType, originalRowType, false, metadata, name, comment);
         this.keyFields = keyFields;
     }
 
@@ -56,7 +54,7 @@ public class DBSPSourceMapOperator extends DBSPSourceTableOperator {
     public DBSPOperator withFunction(@Nullable DBSPExpression unused, DBSPType outputType) {
         return new DBSPSourceMapOperator(this.getNode(), this.sourceName,
                 this.keyFields, outputType.to(DBSPTypeIndexedZSet.class), this.originalRowType,
-                this.comment, this.metadata, this.tableName);
+                this.metadata, this.tableName, this.comment);
     }
 
     @Override
@@ -64,7 +62,7 @@ public class DBSPSourceMapOperator extends DBSPSourceTableOperator {
         if (force || this.inputsDiffer(newInputs))
             return new DBSPSourceMapOperator(this.getNode(), this.sourceName,
                     this.keyFields, this.getOutputIndexedZSetType(), this.originalRowType,
-                    this.comment, this.metadata, this.tableName);
+                    this.metadata, this.tableName, this.comment);
         return this;
     }
 
@@ -83,7 +81,7 @@ public class DBSPSourceMapOperator extends DBSPSourceTableOperator {
             }
             current++;
         }
-        return new DBSPTypeStruct(this.originalRowType.getNode(), name, name, fields);
+        return new DBSPTypeStruct(this.originalRowType.getNode(), name, name, fields, false);
     }
 
     /** Return a struct that is similar with the originalRowType, but where
@@ -97,19 +95,22 @@ public class DBSPSourceMapOperator extends DBSPSourceTableOperator {
                 fields.add(field);
                 keyIndexes++;
             } else {
-                DBSPType some = new DBSPTypeUser(
-                        field.getNode(), DBSPTypeCode.USER, "Option", false, field.type);
+                DBSPType fieldType = field.type;
+                // We need here an explicit Option type, because
+                // fieldType may be nullable.  The resulting Rust type will
+                // actually be Option<Option<Type>>.
+                DBSPType some = new DBSPTypeOption(fieldType);
                 fields.add(new DBSPTypeStruct.Field(
-                        field.getNode(), field.name, field.sanitizedName, some, field.nameIsQuoted));
+                        field.getNode(), field.name, current, some, field.nameIsQuoted));
             }
             current++;
         }
-        return new DBSPTypeStruct(this.originalRowType.getNode(), name, name, fields);
+        return new DBSPTypeStruct(this.originalRowType.getNode(), name, name, fields, false);
     }
 
     /** Return a closure that describes the key function. */
     public DBSPExpression getKeyFunc() {
-        DBSPVariablePath var = new DBSPVariablePath("t", this.getOutputIndexedZSetType().elementType.ref());
+        DBSPVariablePath var = new DBSPVariablePath(this.getOutputIndexedZSetType().elementType.ref());
         DBSPExpression[] fields = new DBSPExpression[this.keyFields.size()];
         int insertAt = 0;
         for (int index: this.keyFields) {
@@ -121,7 +122,7 @@ public class DBSPSourceMapOperator extends DBSPSourceTableOperator {
 
     /** Return a closure that describes the key function when applied to upsertStructType.toTuple(). */
     public DBSPExpression getUpdateKeyFunc(DBSPTypeStruct upsertStructType) {
-        DBSPVariablePath var = new DBSPVariablePath("t", upsertStructType.toTuple().ref());
+        DBSPVariablePath var = new DBSPVariablePath(upsertStructType.toTupleDeep().ref());
         DBSPExpression[] fields = new DBSPExpression[this.keyFields.size()];
         int insertAt = 0;
         for (int index: this.keyFields) {

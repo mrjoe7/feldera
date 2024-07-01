@@ -23,20 +23,36 @@
 
 package org.dbsp.sqlCompiler.compiler.frontend.statements;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.calcite.sql.SqlNode;
 import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.RelColumnMetadata;
 
 import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Map;
 
-/**
- * Describes a table as produced by a CREATE TABLE DDL statement.
- */
+/** Describes a table as produced by a CREATE TABLE DDL statement. */
 public class CreateTableStatement extends CreateRelationStatement {
     public CreateTableStatement(SqlNode node, String statement,
                                 String tableName, boolean nameIsQuoted,
-                                @Nullable String comment,
-                                List<RelColumnMetadata> columns) {
-        super(node, statement, tableName, nameIsQuoted, comment, columns);
+                                List<RelColumnMetadata> columns,
+                                @Nullable Map<String, String> properties) {
+        super(node, statement, tableName, nameIsQuoted, columns, properties);
+    }
+
+    public boolean isMaterialized() {
+        String mat = this.getPropertyValue("materialized");
+        if (mat == null)
+            return false;
+        return mat.equalsIgnoreCase("true");
+    }
+
+    @Override
+    public JsonNode asJson() {
+        JsonNode node = super.asJson();
+        ObjectNode object = (ObjectNode) node;
+        object.put("materialized", this.isMaterialized());
+        return object;
     }
 }

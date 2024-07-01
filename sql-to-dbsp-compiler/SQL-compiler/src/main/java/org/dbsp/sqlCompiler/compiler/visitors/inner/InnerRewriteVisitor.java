@@ -1,20 +1,55 @@
 package org.dbsp.sqlCompiler.compiler.visitors.inner;
 
-import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitRewriter;
 import org.dbsp.sqlCompiler.ir.DBSPAggregate;
 import org.dbsp.sqlCompiler.ir.DBSPFunction;
 import org.dbsp.sqlCompiler.ir.DBSPParameter;
-import org.dbsp.sqlCompiler.ir.expression.*;
+import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
+import org.dbsp.sqlCompiler.ir.expression.DBSPApplyExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPApplyMethodExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPAsExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPAssignmentExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPBinaryExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPBlockExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPBorrowExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPCastExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPCloneExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPClosureExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPComparatorExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPConditionalAggregateExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPConstructorExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPDerefExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPEnumValue;
+import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPFieldComparatorExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPFieldExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPFlatmap;
+import org.dbsp.sqlCompiler.ir.expression.DBSPForExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPIfExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPIsNullExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPNoComparatorExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPPathExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPQualifyTypeExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPQuestionExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPRawTupleExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPSomeExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPSortExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPUnaryExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPUnsignedUnwrapExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPUnsignedWrapExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPUnwrapExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPVariablePath;
+import org.dbsp.sqlCompiler.ir.expression.DBSPWindowBoundExpression;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPBinaryLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPBoolLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPDateLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPDecimalLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPDoubleLiteral;
-import org.dbsp.sqlCompiler.ir.expression.literal.DBSPRealLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPGeoPointLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI128Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI16Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI32Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI64Literal;
@@ -22,11 +57,15 @@ import org.dbsp.sqlCompiler.ir.expression.literal.DBSPISizeLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIntervalMillisLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIntervalMonthsLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPKeywordLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPMapLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPNullLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPRealLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPStrLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPStringLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPTimeLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPTimestampLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU128Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU16Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU32Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU64Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPUSizeLiteral;
@@ -35,22 +74,25 @@ import org.dbsp.sqlCompiler.ir.expression.literal.DBSPZSetLiteral;
 import org.dbsp.sqlCompiler.ir.statement.DBSPComment;
 import org.dbsp.sqlCompiler.ir.statement.DBSPConstItem;
 import org.dbsp.sqlCompiler.ir.statement.DBSPExpressionStatement;
+import org.dbsp.sqlCompiler.ir.statement.DBSPFunctionItem;
 import org.dbsp.sqlCompiler.ir.statement.DBSPItem;
 import org.dbsp.sqlCompiler.ir.statement.DBSPLetStatement;
 import org.dbsp.sqlCompiler.ir.statement.DBSPStatement;
 import org.dbsp.sqlCompiler.ir.statement.DBSPStructItem;
+import org.dbsp.sqlCompiler.ir.statement.DBSPStructWithHelperItem;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeStream;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeFunction;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeRawTuple;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeRef;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeMap;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeStream;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeStruct;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeUser;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeVec;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeUser;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeVec;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBaseType;
 import org.dbsp.util.IWritesLogs;
 import org.dbsp.util.Linq;
@@ -208,7 +250,7 @@ public abstract class InnerRewriteVisitor
         this.push(type);
         DBSPType[] elements = this.transform(type.tupFields);
         this.pop(type);
-        DBSPType result = new DBSPTypeTuple(elements);
+        DBSPType result = new DBSPTypeTuple(type.getNode(), type.mayBeNull, elements);
         this.map(type, result);
         return VisitDecision.STOP;
     }
@@ -218,7 +260,7 @@ public abstract class InnerRewriteVisitor
         this.push(type);
         DBSPType field = this.transform(type.type);
         this.pop(type);
-        DBSPType result = new DBSPTypeRef(field, type.mutable);
+        DBSPType result = new DBSPTypeRef(field, type.mutable, type.mayBeNull);
         this.map(type, result);
         return VisitDecision.STOP;
     }
@@ -248,7 +290,7 @@ public abstract class InnerRewriteVisitor
         this.push(field);
         DBSPType type = this.transform(field.type);
         DBSPTypeStruct.Field result = new DBSPTypeStruct.Field(
-                field.getNode(), field.name, field.sanitizedName, type, field.nameIsQuoted);
+                field.getNode(), field.name, field.index, type, field.nameIsQuoted);
         this.pop(field);
         this.map(field, result);
         return VisitDecision.STOP;
@@ -264,7 +306,7 @@ public abstract class InnerRewriteVisitor
             fields.add(field);
         }
         this.pop(type);
-        DBSPType result = new DBSPTypeStruct(type.getNode(), type.name, type.sanitizedName, fields);
+        DBSPType result = new DBSPTypeStruct(type.getNode(), type.name, type.sanitizedName, fields, type.mayBeNull);
         this.map(type, result);
         return VisitDecision.STOP;
     }
@@ -275,6 +317,17 @@ public abstract class InnerRewriteVisitor
         DBSPType elementType = this.transform(type.getElementType());
         this.pop(type);
         DBSPType result = new DBSPTypeVec(elementType, type.mayBeNull);
+        this.map(type, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPTypeMap type) {
+        this.push(type);
+        DBSPType keyType = this.transform(type.getKeyType());
+        DBSPType valueType = this.transform(type.getValueType());
+        this.pop(type);
+        DBSPType result = new DBSPTypeMap(keyType, valueType, type.mayBeNull);
         this.map(type, result);
         return VisitDecision.STOP;
     }
@@ -385,6 +438,16 @@ public abstract class InnerRewriteVisitor
     }
 
     @Override
+    public VisitDecision preorder(DBSPI128Literal expression) {
+        this.push(expression);
+        DBSPType type = this.transform(expression.getType());
+        this.pop(expression);
+        DBSPExpression result = new DBSPI128Literal(expression.getNode(), type, expression.value);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
     public VisitDecision preorder(DBSPIntervalMillisLiteral expression) {
         this.push(expression);
         DBSPType type = this.transform(expression.getType());
@@ -483,6 +546,16 @@ public abstract class InnerRewriteVisitor
     }
 
     @Override
+    public VisitDecision preorder(DBSPU16Literal expression) {
+        this.push(expression);
+        DBSPType type = this.transform(expression.getType());
+        this.pop(expression);
+        DBSPExpression result = new DBSPU16Literal(expression.getNode(), type, expression.value);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
     public VisitDecision preorder(DBSPU32Literal expression) {
         this.push(expression);
         DBSPType type = this.transform(expression.getType());
@@ -498,6 +571,16 @@ public abstract class InnerRewriteVisitor
         DBSPType type = this.transform(expression.getType());
         this.pop(expression);
         DBSPExpression result = new DBSPU64Literal(expression.getNode(), type, expression.value);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPU128Literal expression) {
+        this.push(expression);
+        DBSPType type = this.transform(expression.getType());
+        this.pop(expression);
+        DBSPExpression result = new DBSPU128Literal(expression.getNode(), type, expression.value);
         this.map(expression, result);
         return VisitDecision.STOP;
     }
@@ -526,6 +609,23 @@ public abstract class InnerRewriteVisitor
     }
 
     @Override
+    public VisitDecision preorder(DBSPMapLiteral expression) {
+        this.push(expression);
+        DBSPType type = this.transform(expression.getType());
+        List<DBSPExpression> keys = null;
+        List<DBSPExpression> values = null;
+        if (expression.keys != null) {
+            keys = Linq.map(expression.keys, this::transform);
+            assert expression.values != null;
+            values = Linq.map(expression.values, this::transform);
+        }
+        this.pop(expression);
+        DBSPExpression result = new DBSPMapLiteral(type.to(DBSPTypeMap.class), keys, values);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
     public VisitDecision preorder(DBSPZSetLiteral expression) {
         this.push(expression);
         DBSPType type = this.transform(expression.getType());
@@ -546,12 +646,29 @@ public abstract class InnerRewriteVisitor
         this.push(expression);
         DBSPTypeTuple inputElementType = this.transform(expression.inputElementType).to(DBSPTypeTuple.class);
         DBSPType indexType = null;
-        if (expression.indexType != null)
-            indexType = this.transform(expression.indexType);
+        if (expression.collectionIndexType != null)
+            indexType = this.transform(expression.collectionIndexType);
+        DBSPClosureExpression collectionExpression = this.transform(expression.collectionExpression)
+                .to(DBSPClosureExpression.class);
+        List<DBSPClosureExpression> rightProjections = null;
+        if (expression.rightProjections != null)
+            rightProjections = Linq.map(expression.rightProjections,
+                    e -> this.transform(e).to(DBSPClosureExpression.class));
         this.pop(expression);
         DBSPExpression result = new DBSPFlatmap(expression.getNode(), inputElementType,
-                    expression.collectionFieldIndex, expression.outputFieldIndexes,
-                    indexType);
+                    collectionExpression, expression.leftCollectionIndexes,
+                    rightProjections,
+                    expression.emitIteratedElement, indexType, expression.shuffle);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPQuestionExpression expression) {
+        this.push(expression);
+        DBSPExpression source = this.transform(expression.source);
+        this.pop(expression);
+        DBSPExpression result = source.question();
         this.map(expression, result);
         return VisitDecision.STOP;
     }
@@ -717,6 +834,16 @@ public abstract class InnerRewriteVisitor
     }
 
     @Override
+    public VisitDecision preorder(DBSPUnwrapExpression expression) {
+        this.push(expression);
+        DBSPExpression source = this.transform(expression.expression);
+        this.pop(expression);
+        DBSPExpression result = new DBSPUnwrapExpression(source);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
     public VisitDecision preorder(DBSPEnumValue expression) {
         this.map(expression, expression);
         return VisitDecision.STOP;
@@ -733,9 +860,31 @@ public abstract class InnerRewriteVisitor
     }
 
     @Override
+    public VisitDecision preorder(DBSPUnsignedWrapExpression expression) {
+        this.push(expression);
+        DBSPExpression source = this.transform(expression.source);
+        this.pop(expression);
+        DBSPExpression result = new DBSPUnsignedWrapExpression(
+                expression.getNode(), source, expression.ascending, expression.nullsLast);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPUnsignedUnwrapExpression expression) {
+        this.push(expression);
+        DBSPExpression source = this.transform(expression.source);
+        this.pop(expression);
+        DBSPExpression result = new DBSPUnsignedUnwrapExpression(
+                expression.getNode(), source,
+                expression.getType(), expression.ascending, expression.nullsLast);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
     public VisitDecision preorder(DBSPForExpression expression) {
         this.push(expression);
-        DBSPExpression variable = this.transform(expression.variable);
         DBSPExpression iterated = this.transform(expression.iterated);
         DBSPExpression body = this.transform(expression.block);
         DBSPBlockExpression block;
@@ -744,7 +893,7 @@ public abstract class InnerRewriteVisitor
         else
             block = new DBSPBlockExpression(Linq.list(), body);
         this.pop(expression);
-        DBSPExpression result = new DBSPForExpression(variable.to(DBSPVariablePath.class), iterated, block);
+        DBSPExpression result = new DBSPForExpression(expression.variable, iterated, block);
         this.map(expression, result);
         return VisitDecision.STOP;
     }
@@ -835,7 +984,11 @@ public abstract class InnerRewriteVisitor
         this.push(expression);
         DBSPExpression[] fields = this.transform(expression.fields);
         this.pop(expression);
-        DBSPExpression result = new DBSPTupleExpression(fields);
+        DBSPExpression result;
+        if (expression.isNull)
+            result = new DBSPTupleExpression(expression.getType().to(DBSPTypeTuple.class));
+        else
+            result = new DBSPTupleExpression(fields);
         this.map(expression, result);
         return VisitDecision.STOP;
     }
@@ -848,6 +1001,17 @@ public abstract class InnerRewriteVisitor
         this.pop(expression);
         DBSPExpression result = new DBSPUnaryExpression(expression.getNode(), type,
                     expression.operation, source);
+        this.map(expression, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPWindowBoundExpression expression) {
+        this.push(expression);
+        DBSPExpression source = this.transform(expression.representation);
+        this.pop(expression);
+        DBSPExpression result = new DBSPWindowBoundExpression(expression.getNode(),
+                expression.isPreceding, source);
         this.map(expression, result);
         return VisitDecision.STOP;
     }
@@ -911,6 +1075,25 @@ public abstract class InnerRewriteVisitor
         @Nullable DBSPExpression expression = this.transformN(item.expression);
         this.pop(item);
         DBSPConstItem result = new DBSPConstItem(item.name, type, expression);
+        this.map(item, result);
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPFunctionItem item) {
+        this.push(item);
+        // TODO: do we need to transform?
+        this.pop(item);
+        this.map(item, item);
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPStructWithHelperItem item) {
+        this.push(item);
+        DBSPType type = this.transform(item.type);
+        this.pop(item);
+        DBSPItem result = new DBSPStructWithHelperItem(type.to(DBSPTypeStruct.class));
         this.map(item, result);
         return VisitDecision.STOP;
     }
@@ -988,11 +1171,6 @@ public abstract class InnerRewriteVisitor
                 aggregate.getNode(), rowVar.to(DBSPVariablePath.class), implementations, aggregate.isWindowAggregate);
         this.map(aggregate, result);
         return VisitDecision.STOP;
-    }
-
-    @Override
-    public String toString() {
-        return "InnerRewriteVisitor";
     }
 
     /**

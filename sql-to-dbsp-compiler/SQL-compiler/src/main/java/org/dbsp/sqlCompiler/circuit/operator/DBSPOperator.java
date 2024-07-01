@@ -25,16 +25,17 @@ package org.dbsp.sqlCompiler.circuit.operator;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
 import org.dbsp.sqlCompiler.compiler.errors.SourcePositionRange;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.visitors.inner.EquivalenceContext;
 import org.dbsp.sqlCompiler.ir.DBSPNode;
 import org.dbsp.sqlCompiler.ir.IDBSPOuterNode;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeFunction;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeStream;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeStream;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 import org.dbsp.sqlCompiler.ir.type.IHasType;
 import org.dbsp.util.IIndentStream;
 import org.dbsp.util.Linq;
@@ -84,6 +85,7 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
         this.derivedFrom = -1;
         if (!operation.startsWith("waterline") &&
                 !operation.startsWith("apply") &&
+                !operation.startsWith("delay") &&
                 !outputType.is(DBSPTypeZSet.class) &&
                 !outputType.is(DBSPTypeIndexedZSet.class))
             throw new InternalCompilerError("Operator output type is unexpected " + outputType);
@@ -91,6 +93,12 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
 
     public String getOutputName() {
         return "stream" + this.getId();
+    }
+
+    public String getDerivedFrom() {
+        if (this.derivedFrom >= 0)
+            return Long.toString(this.derivedFrom);
+        return Long.toString(this.id);
     }
 
     public String getIdString() {
@@ -125,20 +133,7 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
                     " but it returns " + type, this);
     }
 
-    /**
-     * True if this operator is parameterized by a function.
-     * This is not always the same as this.function == null,
-     * e.g., AggregateOperator always returns 'true', although
-     * the function can be represented as an Aggregate.
-     * This is also true for ConstantOperator, although for these
-     * the function may not be a closure, but rather a constant. */
-    public boolean hasFunction() {
-        return this.function != null;
-    }
-
-    /**
-     * Return a version of this operator with the function replaced.
-     */
+    /** Return a version of this operator with the function replaced. */
     public abstract DBSPOperator withFunction(@Nullable DBSPExpression expression, DBSPType outputType);
 
     public DBSPTypeZSet getOutputZSetType() { return this.outputType.to(DBSPTypeZSet.class); }
@@ -151,14 +146,16 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
         return this.getOutputZSetType().elementType;
     }
 
-    /**
-     * If the output is a ZSet it returns the element type.
+    /** If the output is a ZSet it returns the element type.
      * If the output is an IndexedZSet it returns the tuple (keyType, elementType).
-     */
+     * If the output is something else, it returns its type.
+     * (The last can happen for apply nodes, after insertion of limiters). */
     public DBSPType getOutputRowType() {
         if (this.outputType.is(DBSPTypeZSet.class))
             return this.getOutputZSetElementType();
-        return this.getOutputIndexedZSetType().getKVType();
+        if (this.outputType.is(DBSPTypeIndexedZSet.class))
+            return this.getOutputIndexedZSetType().getKVType();
+        return this.outputType;
     }
 
     /**
@@ -166,10 +163,9 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
      * to the specified function.
      * @param function Function with multiple arguments
      * @param source   Source operator producing the arg input to function.
-     * @param arg      Argument number of the function supplied from source operator.
-     */
-    protected void checkArgumentFunctionType(DBSPExpression function,
-                                             @SuppressWarnings("SameParameterValue") int arg, DBSPOperator source) {
+     * @param arg      Argument number of the function supplied from source operator. */
+    protected void checkArgumentFunctionType(
+            DBSPExpression function, @SuppressWarnings("SameParameterValue") int arg, DBSPOperator source) {
         if (function.getType().is(DBSPTypeAny.class))
             return;
         DBSPType sourceElementType;
@@ -189,8 +185,8 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
         if (argType.is(DBSPTypeAny.class))
             return;
         if (!sourceElementType.sameType(argType))
-            throw new InternalCompilerError("Expected function to accept " + sourceElementType +
-                    " as argument " + arg + " but it expects " + funcType.argumentTypes[arg], this);
+            throw new InternalCompilerError("Expected function to accept\n" + sourceElementType +
+                    " as argument " + arg + " but it expects\n" + funcType.argumentTypes[arg], this);
     }
 
     protected void addInput(DBSPOperator node) {
@@ -209,8 +205,7 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
         return Objects.requireNonNull(this.function);
     }
 
-    /**
-     * Return a version of this operator with the inputs replaced.
+    /** Return a version of this operator with the inputs replaced.
      * @param newInputs  Inputs to use instead of the old ones.
      * @param force      If true always return a new operator.
      *                   If false and the inputs are the same this may return this.
@@ -221,16 +216,29 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
      * Return true if any of the inputs in `newInputs` is different from one of the inputs
      * of this operator.
      * @param newInputs  List of alternative inputs.
+     * @param sameSizeRequired  If true and the sizes don't match, throw.
      */
-    public boolean inputsDiffer(List<DBSPOperator> newInputs) {
-        if (this.inputs.size() != newInputs.size())
-            throw new InternalCompilerError("Trying to replace " + this.inputs.size() +
-                    " with " + newInputs.size() + " inputs", this);
+    public boolean inputsDiffer(List<DBSPOperator> newInputs, boolean sameSizeRequired) {
+        if (this.inputs.size() != newInputs.size()) {
+            if (sameSizeRequired)
+                throw new InternalCompilerError("Comparing opeartor with " + this.inputs.size() +
+                        " inputs with a list of " + newInputs.size() + " inputs", this);
+            else
+                return false;
+        }
         for (boolean b: Linq.zip(this.inputs, newInputs, (l, r) -> l != r)) {
             if (b)
                 return true;
         }
         return false;
+    }
+
+    public boolean sameInputs(DBSPOperator other) {
+        return !this.inputsDiffer(other.inputs, false);
+    }
+
+    public boolean inputsDiffer(List<DBSPOperator> newInputs) {
+        return this.inputsDiffer(newInputs, true);
     }
 
     @Override
@@ -239,7 +247,8 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
                 .getSimpleName()
                 .replace("DBSP", "")
                 .replace("Operator", "")
-                + " " + this.getIdString();
+                + " " + this.getIdString()
+                + (this.comment != null ? this.comment : "");
     }
 
     public SourcePositionRange getSourcePosition() {
@@ -285,5 +294,17 @@ public abstract class DBSPOperator extends DBSPNode implements IHasType, IDBSPOu
             builder.append(this.function);
         }
         return builder.append(");");
+    }
+
+    /** True if this is equivalent with the other operator,
+     * which means that common-subexpression elimination can replace this with 'other'.
+     * This implies that all inputs are the same, and the computed functions are the same. */
+    public boolean equivalent(DBSPOperator other) {
+        // Default implementation
+        if (!this.operation.equals(other.operation))
+            return false;
+        if (!this.sameInputs(other))
+            return false;
+        return EquivalenceContext.equiv(this.function, other.function);
     }
 }

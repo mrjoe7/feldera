@@ -22,17 +22,14 @@ public class VarbinaryTests extends SqlIoTest {
         compiler.compileStatements(sql);
     }
 
-    @Test @Ignore("Calcite bug https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6095")
+    @Test
     public void testVarBinary() {
-        this.q("""
-                select x'31', X'ffff'+0;
-                x'31'\tX'ffff'+0
-                1\t65535""");
+        this.queryFailingInCompilation("select X'ffff'+0", "Cannot apply '+' to arguments of type");
     }
 
     @Test
     public void testWrongBinary() {
-        this.shouldFail("select x'hello'",
+        this.queryFailingInCompilation("select x'hello'",
                 "Binary literal string must contain only characters '0' - '9', 'A' - 'F'");
     }
 

@@ -1,18 +1,24 @@
 //! A multithreaded runtime for evaluating DBSP circuits in a data-parallel
 //! fashion.
 
+use crate::circuit::checkpointer::Checkpointer;
+use crate::error::Error as DBSPError;
+use crate::trace::spine_async::merger::{BackgroundOperation, BatchMerger};
 use crate::{
     storage::{
-        backend::{new_default_backend, tempdir_for_thread, Backend},
+        backend::{new_default_backend, tempdir_for_thread, Backend, StorageError},
         buffer_cache::BufferCache,
+        dirlock::LockedDirectory,
         file::cache::FileCacheEntry,
     },
     DetailedError,
 };
-use crossbeam::channel::bounded;
 use crossbeam_utils::sync::{Parker, Unparker};
+use lazy_static::lazy_static;
 use once_cell::sync::Lazy;
+use pipeline_types::config::StorageCacheConfig;
 use serde::Serialize;
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::{
     backtrace::Backtrace,
     borrow::Cow,
@@ -22,7 +28,6 @@ use std::{
     fmt::{Debug, Display, Error as FmtError, Formatter},
     panic::{self, Location, PanicInfo},
     path::{Path, PathBuf},
-    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
@@ -30,8 +35,10 @@ use std::{
     thread::{Builder, JoinHandle, LocalKey, Result as ThreadResult},
 };
 use typedmap::{TypedDashMap, TypedMapKey};
+use uuid::Uuid;
 
-use super::dbsp_handle::{IntoCircuitConfig, Layout};
+use super::dbsp_handle::Layout;
+use super::CircuitConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum Error {
@@ -41,6 +48,8 @@ pub enum Error {
         // reported panics.
         panic_info: Vec<(usize, WorkerPanicInfo)>,
     },
+    /// The storage directory supplied does not match the runtime circuit.
+    IncompatibleStorage,
     Terminated,
 }
 
@@ -49,6 +58,7 @@ impl DetailedError for Error {
         match self {
             Self::WorkerPanic { .. } => Cow::from("WorkerPanic"),
             Self::Terminated => Cow::from("Terminated"),
+            Self::IncompatibleStorage => Cow::from("IncompatibleStorage"),
         }
     }
 }
@@ -66,6 +76,9 @@ impl Display for Error {
                 Ok(())
             }
             Self::Terminated => f.write_str("circuit terminated by the user"),
+            Self::IncompatibleStorage => {
+                f.write_str("Supplied storage directory does not fit the runtime circuit")
+            }
         }
     }
 }
@@ -90,10 +103,18 @@ thread_local! {
     // if the current thread is not running in a multithreaded runtime.
     static RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
 
+    // Reference to the buffer cache used by storage. This is shared between the worker and
+    // the corresponding background thread as they typically operate on the same set of files.
+    static BUFFER_CACHE: RefCell<Option<Arc<BufferCache<FileCacheEntry>>>> = const { RefCell::new(None) };
+
     // 0-based index of the current worker thread within its runtime.
     // Returns `0` if the current thread in not running in a multithreaded
     // runtime.
     pub(crate) static WORKER_INDEX: Cell<usize> = const { Cell::new(0) };
+
+    // Returns true if this thread is a background worker thread (that doesn't
+    // run a circuit).
+    pub(crate) static IS_BACKGROUND_THREAD: Cell<bool> = const { Cell::new(false) };
 }
 
 pub struct LocalStoreMarker;
@@ -178,43 +199,26 @@ impl WorkerPanicInfo {
 
 struct RuntimeInner {
     layout: Layout,
-    storage: StorageLocation,
+    storage: PathBuf,
+    cache: StorageCacheConfig,
+    min_storage_rows: usize,
     store: LocalStore,
     // Panic info collected from failed worker threads.
     panic_info: Vec<RwLock<Option<WorkerPanicInfo>>>,
 }
 
-impl Drop for RuntimeInner {
-    fn drop(&mut self) {
-        match &self.storage {
-            StorageLocation::Temporary(path) => {
-                let did_runtime_panick = self
-                    .panic_info
-                    .iter()
-                    .any(|info| info.read().map_or_else(|_| true, |i| i.is_some()));
-                if std::thread::panicking() || did_runtime_panick {
-                    eprintln!("Preserved runtime storage at: {:?} due to panic", path);
-                } else {
-                    let _ = std::fs::remove_dir_all(path);
-                }
-            }
-            StorageLocation::Permanent(_) => {}
-        }
-    }
-}
-
 /// The location where the runtime stores its data.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum StorageLocation {
     Temporary(PathBuf),
-    Permanent(PathBuf),
+    Permanent(LockedDirectory),
 }
 
 impl AsRef<Path> for StorageLocation {
     fn as_ref(&self) -> &Path {
         match self {
             Self::Temporary(path) => path.as_ref(),
-            Self::Permanent(path) => path.as_ref(),
+            Self::Permanent(path) => path.base(),
         }
     }
 }
@@ -223,7 +227,7 @@ impl From<StorageLocation> for PathBuf {
     fn from(location: StorageLocation) -> PathBuf {
         match location {
             StorageLocation::Temporary(path) => path,
-            StorageLocation::Permanent(path) => path,
+            StorageLocation::Permanent(path) => path.base().into(),
         }
     }
 }
@@ -238,25 +242,39 @@ impl Debug for RuntimeInner {
 }
 
 impl RuntimeInner {
-    fn new(layout: Layout, storage: Option<String>) -> Self {
-        let local_workers = layout.local_workers().len();
+    fn new(config: CircuitConfig, storage: PathBuf) -> Result<Self, DBSPError> {
+        let local_workers = config.layout.local_workers().len();
         let mut panic_info = Vec::with_capacity(local_workers);
         for _ in 0..local_workers {
             panic_info.push(RwLock::new(None));
         }
-        let storage = storage.map_or_else(
-            // Note that we use into_path() here which avoids deleting the temporary directory
-            // we still clean it up when the runtime is dropped -- but keep it around on panic.
-            || StorageLocation::Temporary(tempfile::tempdir().unwrap().into_path()),
-            |s| StorageLocation::Permanent(PathBuf::from(s)),
-        );
 
-        Self {
-            layout,
+        let cache = config
+            .storage
+            .as_ref()
+            .map_or(Default::default(), |storage| storage.cache);
+        // Check if the selected checkpoint to resume from exists.
+        let checkpoint_dir = storage.join(config.init_checkpoint.to_string());
+        if config.init_checkpoint != Uuid::nil()
+            && !checkpoint_dir.exists()
+            && !checkpoint_dir.is_dir()
+        {
+            return Err(DBSPError::Storage(StorageError::CheckpointNotFound(
+                config.init_checkpoint,
+            )));
+        }
+        // Clean up any stale checkpoints / files.
+        let checkpointer = Checkpointer::new(storage.clone());
+        checkpointer.gc_startup()?;
+
+        Ok(Self {
+            layout: config.layout,
+            cache,
             storage,
+            min_storage_rows: config.min_storage_rows,
             store: TypedDashMap::new(),
             panic_info,
-        }
+        })
     }
 }
 
@@ -274,8 +292,10 @@ fn panic_hook(panic_info: &PanicInfo<'_>, default_panic_hook: &dyn Fn(&PanicInfo
     default_panic_hook(panic_info);
 
     RUNTIME.with(|runtime| {
-        if let Some(runtime) = runtime.borrow().clone() {
-            runtime.panic(panic_info)
+        if let Ok(runtime) = runtime.try_borrow() {
+            if let Some(runtime) = runtime.as_ref() {
+                runtime.panic(panic_info);
+            }
         }
     })
 }
@@ -300,6 +320,41 @@ static DEFAULT_PANIC_HOOK: Lazy<Box<dyn Fn(&PanicInfo<'_>) + 'static + Sync + Se
 /// Returns the default Rust panic hook.
 fn default_panic_hook() -> &'static (dyn Fn(&PanicInfo<'_>) + 'static + Sync + Send) {
     &*DEFAULT_PANIC_HOOK
+}
+
+fn mk_background_thread(
+    thread_name: String,
+    runtime: Option<Runtime>,
+    worker_index: usize,
+    bg_work_receiver: Receiver<BackgroundOperation>,
+    init_sender: Option<SyncSender<(Unparker, Arc<AtomicBool>)>>,
+) -> JoinHandle<()> {
+    Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            if let Some(runtime) = runtime {
+                RUNTIME.with(|rt| *rt.borrow_mut() = Some(runtime.clone()));
+            }
+            IS_BACKGROUND_THREAD.set(true);
+            WORKER_INDEX.set(worker_index);
+
+            // Send the main thread our parker and kill signal
+            // TODO: Share a single kill signal across all workers
+            if let Some(init_sender) = init_sender {
+                init_sender
+                    .send((
+                        PARKER.with(|parker| parker.unparker().clone()),
+                        KILL_SIGNAL.with(|s| s.clone()),
+                    ))
+                    .unwrap();
+            }
+
+            let mut merger = BatchMerger::new(bg_work_receiver);
+            merger.run();
+        })
+        .unwrap_or_else(|error| {
+            panic!("failed to spawn background worker thread {worker_index}: {error}");
+        })
 }
 
 impl Runtime {
@@ -340,36 +395,91 @@ impl Runtime {
     ///     for _ in 0..100 {
     ///         root.step().unwrap();
     ///     }
-    /// });
+    /// })
+    /// .unwrap();
     ///
     /// // Wait for all worker threads to terminate.
     /// hruntime.join().unwrap();
     /// # }
     /// ```
-    pub fn run<F>(cconf: impl IntoCircuitConfig, circuit: F) -> RuntimeHandle
+    pub fn run<F>(config: impl Into<CircuitConfig>, circuit: F) -> Result<RuntimeHandle, DBSPError>
     where
         F: FnOnce() + Clone + Send + 'static,
     {
-        let storage = cconf.storage();
-        let layout = cconf.layout();
+        let config: CircuitConfig = config.into();
 
-        let workers = layout.local_workers();
+        let workers = config.layout.local_workers();
         let nworkers = workers.len();
-        let runtime = Self(Arc::new(RuntimeInner::new(layout, storage)));
+
+        let storage: Result<StorageLocation, DBSPError> = config.storage.clone().map_or_else(
+            // Note that we use into_path() here which avoids deleting the temporary directory
+            // we still clean it up when the runtime is dropped -- but keep it around on panic.
+            || {
+                if config.init_checkpoint != Uuid::nil() {
+                    return Err(DBSPError::Storage(StorageError::CheckpointNotFound(
+                        config.init_checkpoint,
+                    )));
+                }
+                Ok(StorageLocation::Temporary(
+                    tempfile::tempdir().unwrap().into_path(),
+                ))
+            },
+            |s| {
+                let locked_path = LockedDirectory::new(s.path)?;
+                Ok(StorageLocation::Permanent(locked_path))
+            },
+        );
+        let storage = storage?;
+
+        let runtime = Self(Arc::new(RuntimeInner::new(
+            config,
+            storage.as_ref().to_path_buf(),
+        )?));
+
+        for idx in 0..nworkers {
+            runtime
+                .local_store()
+                .insert(BufferCacheId(idx), Arc::new(BufferCache::new(idx)));
+        }
 
         // Install custom panic hook.
-
         let default_hook = default_panic_hook();
         panic::set_hook(Box::new(move |panic_info| {
             panic_hook(panic_info, default_hook)
         }));
 
+        let mut background_handles = Vec::with_capacity(nworkers);
+        background_handles.extend(workers.clone().map(|worker_index| {
+            let cloned_runtime = runtime.clone();
+            let (init_sender, init_receiver) = sync_channel(1);
+            let (bg_work_sender, bg_work_receiver) = sync_channel(BatchMerger::RX_QUEUE_SIZE);
+            let join_handle = mk_background_thread(
+                format!("dbsp-background-{}", worker_index),
+                Some(cloned_runtime),
+                worker_index,
+                bg_work_receiver,
+                Some(init_sender),
+            );
+            runtime
+                .local_store()
+                .insert(BackgroundChannel(worker_index), Arc::new(bg_work_sender));
+            (join_handle, init_receiver)
+        }));
+
+        // We instantiate them before `workers` to avoid any races where code in workers
+        // tries to access reach background thread channels before they are fully initialized.
+        let mut background_workers = Vec::with_capacity(nworkers);
+        background_workers.extend(background_handles.into_iter().map(|(handle, recv)| {
+            let (unparker, kill_signal) = recv.recv().unwrap();
+            BackgroundWorkerHandle::new(handle, unparker, kill_signal)
+        }));
+
         let mut handles = Vec::with_capacity(nworkers);
-        handles.extend(workers.map(|worker_index| {
+        handles.extend(workers.clone().map(|worker_index| {
             let runtime = runtime.clone();
             let build_circuit = circuit.clone();
 
-            let (init_sender, init_receiver) = bounded(1);
+            let (init_sender, init_receiver) = sync_channel(1);
             let join_handle = Builder::new()
                 .name(format!("dbsp-worker-{worker_index}"))
                 .spawn(move || {
@@ -402,7 +512,36 @@ impl Runtime {
             WorkerHandle::new(handle, unparker, kill_signal)
         }));
 
-        RuntimeHandle::new(runtime, workers)
+        Ok(RuntimeHandle::new(
+            runtime,
+            workers,
+            background_workers,
+            storage,
+        ))
+    }
+
+    /// Returns a channel for enqueuing a work closure that's handled in a background thread.
+    ///
+    /// This is currently only used for file compaction but could be extended for
+    /// more generic background work in the future.
+    pub(crate) fn background_channel() -> Arc<SyncSender<BackgroundOperation>> {
+        let worker_index = Runtime::worker_index();
+        if let Some(rt) = Runtime::runtime() {
+            rt.local_store()
+                .get(&BackgroundChannel(worker_index))
+                .unwrap()
+                .clone()
+        } else {
+            let (bg_work_sender, bg_work_receiver) = sync_channel(BatchMerger::RX_QUEUE_SIZE);
+            let _join_handle = mk_background_thread(
+                String::from("dbsp-background-no-runtime"),
+                None,
+                worker_index,
+                bg_work_receiver,
+                None,
+            );
+            Arc::new(bg_work_sender)
+        }
     }
 
     /// Returns a reference to the multithreaded runtime that
@@ -419,31 +558,32 @@ impl Runtime {
         RUNTIME.with(|rt| rt.borrow().clone())
     }
 
-    fn new_backend() -> Rc<Backend> {
+    pub(crate) fn new_backend() -> Backend {
         let rt = Runtime::runtime();
-        let dir = if let Some(rt) = rt {
-            rt.inner().storage.clone().as_ref().to_path_buf()
+        let (dir, cache) = if let Some(rt) = rt {
+            (rt.inner().storage.clone(), rt.inner().cache)
         } else {
-            tempdir_for_thread()
+            (tempdir_for_thread(), StorageCacheConfig::default())
         };
-        Rc::new(new_default_backend(dir))
+        new_default_backend(dir, cache)
     }
 
-    /// Returns the (thread-local) storage backend.
-    pub fn backend() -> Rc<Backend> {
-        thread_local! {
-            pub static DEFAULT_BACKEND: Rc<Backend> = Runtime::new_backend();
+    /// Returns the storage backend.
+    pub fn storage() -> Arc<BufferCache<FileCacheEntry>> {
+        lazy_static! {
+            pub static ref NO_RUNTIME_CACHE: Arc<BufferCache<FileCacheEntry>> =
+                Arc::new(BufferCache::new(0xdead));
         }
-        DEFAULT_BACKEND.with(|rc| rc.clone())
-    }
-
-    /// Returns the (thread-local) storage backend.
-    pub fn storage() -> Rc<BufferCache<Backend, FileCacheEntry>> {
-        thread_local! {
-            pub static CACHE: Rc<BufferCache<Backend, FileCacheEntry>> =
-                Rc::new(BufferCache::new(Runtime::backend()));
+        if let Some(rt) = Runtime::runtime() {
+            // The goal is to share the cache between the worker and the
+            // corresponding background thread in case we have a Runtime
+            let cache = rt
+                .local_store()
+                .get(&BufferCacheId(Runtime::worker_index()));
+            cache.unwrap().clone()
+        } else {
+            NO_RUNTIME_CACHE.clone()
         }
-        CACHE.with(|rc| rc.clone())
     }
 
     /// Returns 0-based index of the current worker thread within its runtime.
@@ -451,6 +591,28 @@ impl Runtime {
     /// multihost runtime, this is a global index across all hosts.
     pub fn worker_index() -> usize {
         WORKER_INDEX.get()
+    }
+
+    /// Returns 0-based index of the current background thread within its runtime.
+    /// For threads that run without a runtime or aren't a background thread,
+    /// this method always returns `0`.
+    pub fn background_index() -> usize {
+        if IS_BACKGROUND_THREAD.get() {
+            WORKER_INDEX.get()
+        } else {
+            0
+        }
+    }
+
+    /// Returns the minimum number of rows of a trace to spill it to
+    /// storage. For threads that run without a runtime, this method returns
+    /// `usize::MAX`.
+    pub fn min_storage_rows() -> usize {
+        RUNTIME.with(|rt| {
+            rt.borrow()
+                .as_ref()
+                .map_or(usize::MAX, |runtime| runtime.0.min_storage_rows)
+        })
     }
 
     fn inner(&self) -> &RuntimeInner {
@@ -484,7 +646,7 @@ impl Runtime {
 
     /// Returns the path to the storage directory for this runtime.
     pub fn storage_path(&self) -> PathBuf {
-        self.inner().storage.clone().into()
+        self.inner().storage.clone()
     }
 
     /// A per-worker sequential counter.
@@ -561,16 +723,50 @@ impl WorkerHandle {
     }
 }
 
+/// Background-worker controls.
+#[derive(Debug)]
+struct BackgroundWorkerHandle {
+    join_handle: JoinHandle<()>,
+    unparker: Unparker,
+    kill_signal: Arc<AtomicBool>,
+}
+
+impl BackgroundWorkerHandle {
+    fn new(join_handle: JoinHandle<()>, unparker: Unparker, kill_signal: Arc<AtomicBool>) -> Self {
+        Self {
+            join_handle,
+            unparker,
+            kill_signal,
+        }
+    }
+
+    fn unpark(&self) {
+        self.unparker.unpark();
+    }
+}
+
 /// Handle returned by `Runtime::run`.
 #[derive(Debug)]
 pub struct RuntimeHandle {
     runtime: Runtime,
     workers: Vec<WorkerHandle>,
+    background_workers: Vec<BackgroundWorkerHandle>,
+    storage: StorageLocation,
 }
 
 impl RuntimeHandle {
-    fn new(runtime: Runtime, workers: Vec<WorkerHandle>) -> Self {
-        Self { runtime, workers }
+    fn new(
+        runtime: Runtime,
+        workers: Vec<WorkerHandle>,
+        background_workers: Vec<BackgroundWorkerHandle>,
+        storage: StorageLocation,
+    ) -> Self {
+        Self {
+            runtime,
+            workers,
+            background_workers,
+            storage,
+        }
     }
 
     /// Unpark worker thread.
@@ -596,7 +792,6 @@ impl RuntimeHandle {
     /// clock cycle.
     pub fn kill(self) -> ThreadResult<()> {
         self.kill_async();
-
         self.join()
     }
 
@@ -607,12 +802,18 @@ impl RuntimeHandle {
             worker.kill_signal.store(true, Ordering::SeqCst);
             worker.unpark();
         }
+        for background_worker in self.background_workers.iter() {
+            background_worker.kill_signal.store(true, Ordering::SeqCst);
+            background_worker.unpark();
+        }
     }
 
     /// Wait for all workers in the runtime to terminate.
     ///
     /// The calling thread blocks until all worker threads have terminated.
     pub fn join(self) -> ThreadResult<()> {
+        let storage = self.storage;
+
         // Insist on joining all threads even if some of them fail.
         #[allow(clippy::needless_collect)]
         let results: Vec<ThreadResult<()>> = self
@@ -620,7 +821,38 @@ impl RuntimeHandle {
             .into_iter()
             .map(|h| h.join_handle.join())
             .collect();
+
+        // Dropping the background channels here is important because it will drop the
+        // last references the communication channel with the background threads and
+        // so ensures they error out during blocking receive
+        self.runtime.local_store().retain(|kv| {
+            kv.downcast_key_ref::<BackgroundChannel>()
+                .map_or_else(|| true, |_| false)
+        });
+        let _background_results: Vec<ThreadResult<()>> = self
+            .background_workers
+            .into_iter()
+            .map(|h| h.join_handle.join())
+            .collect();
+        self.runtime.local_store().clear();
+
+        let did_runtime_panic = results.iter().any(|r| r.is_err());
+        RuntimeHandle::cleanup_storage_dir(&storage, did_runtime_panic);
         results.into_iter().collect::<ThreadResult<()>>()
+    }
+
+    /// Clean up the storage dir (used by either `kill_async` or `kill`)
+    fn cleanup_storage_dir(st: &StorageLocation, did_runtime_panic: bool) {
+        match st {
+            StorageLocation::Temporary(path) => {
+                if std::thread::panicking() || did_runtime_panic {
+                    tracing::info!("Preserved runtime storage at: {:?} due to panic", path);
+                } else {
+                    let _ = std::fs::remove_dir_all(path);
+                }
+            }
+            StorageLocation::Permanent(_) => {}
+        }
     }
 
     /// Retrieve panic info for a specific worker.
@@ -628,7 +860,7 @@ impl RuntimeHandle {
         self.runtime.worker_panic_info(worker)
     }
 
-    // Retrieve panic info for all workers.
+    /// Retrieve panic info for all workers.
     pub fn collect_panic_info(&self) -> Vec<(usize, WorkerPanicInfo)> {
         let mut result = Vec::new();
 
@@ -648,6 +880,20 @@ impl TypedMapKey<LocalStoreMarker> for WorkerId {
     type Value = usize;
 }
 
+#[derive(Hash, PartialEq, Eq)]
+struct BackgroundChannel(usize);
+
+impl TypedMapKey<LocalStoreMarker> for BackgroundChannel {
+    type Value = Arc<SyncSender<BackgroundOperation>>;
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct BufferCacheId(usize);
+
+impl TypedMapKey<LocalStoreMarker> for BufferCacheId {
+    type Value = Arc<BufferCache<FileCacheEntry>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::Runtime;
@@ -659,6 +905,7 @@ mod tests {
         operator::Generator,
         Circuit, RootCircuit,
     };
+    use pipeline_types::config::{StorageCacheConfig, StorageConfig};
     use std::{
         cell::RefCell,
         rc::Rc,
@@ -666,6 +913,7 @@ mod tests {
         thread::sleep,
         time::Duration,
     };
+    use uuid::Uuid;
 
     #[test]
     #[cfg_attr(miri, ignore)]
@@ -687,16 +935,23 @@ mod tests {
         let path_clone = path.clone();
         let cconf = CircuitConfig {
             layout: Layout::new_solo(4),
-            storage: Some(path.to_str().unwrap().to_string()),
+            storage: Some(StorageConfig {
+                path: path.to_str().unwrap().to_string(),
+                cache: StorageCacheConfig::default(),
+            }),
+            min_storage_rows: usize::MAX,
+            init_checkpoint: Uuid::nil(),
         };
 
         let hruntime = Runtime::run(cconf, move || {
             let runtime = Runtime::runtime().unwrap();
             assert_eq!(runtime.storage_path(), path_clone);
-        });
+        })
+        .expect("failed to start runtime");
         hruntime.join().unwrap();
         assert!(path.exists(), "persistent storage is not cleaned up");
     }
+
     #[test]
     #[cfg_attr(miri, ignore)]
     fn storage_temp_cleanup() {
@@ -706,12 +961,15 @@ mod tests {
         let cconf = CircuitConfig {
             layout: Layout::new_solo(4),
             storage: None,
+            min_storage_rows: usize::MAX,
+            init_checkpoint: Uuid::nil(),
         };
         let storage_path_clone = storage_path.clone();
         let hruntime = Runtime::run(cconf, move || {
             let runtime = Runtime::runtime().unwrap();
             *storage_path_clone.lock().unwrap() = Some(runtime.storage_path());
-        });
+        })
+        .expect("failed to start runtime");
 
         hruntime.join().unwrap();
         let storage_path = storage_path.lock().unwrap().take().unwrap();
@@ -726,13 +984,16 @@ mod tests {
         let cconf = CircuitConfig {
             layout: Layout::new_solo(4),
             storage: None,
+            min_storage_rows: usize::MAX,
+            init_checkpoint: Uuid::nil(),
         };
         let storage_path_clone = storage_path.clone();
         let hruntime = Runtime::run(cconf, move || {
             let runtime = Runtime::runtime().unwrap();
             *storage_path_clone.lock().unwrap() = Some(runtime.storage_path());
             panic!("oh no");
-        });
+        })
+        .expect("failed to start runtime");
         sleep(Duration::from_millis(100));
         hruntime.kill().expect_err("kill shouldn't have worked");
 
@@ -768,7 +1029,8 @@ mod tests {
             }
 
             assert_eq!(&*data.borrow(), &(0..100).collect::<Vec<usize>>());
-        });
+        })
+        .expect("failed to start runtime");
 
         hruntime.join().unwrap();
     }
@@ -815,7 +1077,8 @@ mod tests {
                     return;
                 }
             }
-        });
+        })
+        .expect("failed to start runtime");
 
         sleep(Duration::from_millis(100));
         hruntime.kill().unwrap();

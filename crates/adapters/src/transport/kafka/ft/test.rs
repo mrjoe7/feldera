@@ -11,7 +11,6 @@ use crate::{
 use anyhow::Error as AnyError;
 use crossbeam::sync::{Parker, Unparker};
 use env_logger::Env;
-use log::info;
 use proptest::prelude::*;
 use rdkafka::mocking::MockCluster;
 use std::{
@@ -23,6 +22,7 @@ use std::{
     thread::sleep,
     time::{Duration, Instant},
 };
+use tracing::info;
 use uuid::Uuid;
 
 /// Wait to receive all records in `data` in the same order.
@@ -32,7 +32,8 @@ fn wait_for_output_ordered(zset: &MockDeZSet<TestStruct, TestStruct>, data: &[Ve
     wait(
         || zset.state().flushed.len() == num_records,
         DEFAULT_TIMEOUT_MS,
-    );
+    )
+    .unwrap();
 
     for (i, val) in data.iter().flat_map(|data| data.iter()).enumerate() {
         assert_eq!(zset.state().flushed[i].unwrap_insert(), val);
@@ -46,7 +47,8 @@ fn wait_for_output_unordered(zset: &MockDeZSet<TestStruct, TestStruct>, data: &[
     wait(
         || zset.state().flushed.len() == num_records,
         DEFAULT_TIMEOUT_MS,
-    );
+    )
+    .unwrap();
 
     let mut data_sorted = data
         .iter()
@@ -111,7 +113,7 @@ outputs:
     let config: PipelineConfig = serde_yaml::from_str(config_str).unwrap();
 
     match Controller::with_config(
-        |workers| Ok(test_circuit(workers)),
+        |workers| Ok(test_circuit::<TestStruct>(workers, &TestStruct::schema())),
         &config,
         Box::new(|e| panic!("error: {e}")),
     ) {
@@ -184,7 +186,7 @@ outputs:
     let test_name_clone = test_name.to_string();
 
     let controller = Controller::with_config(
-        |workers| Ok(test_circuit(workers)),
+        |workers| Ok(test_circuit::<TestStruct>(workers, &TestStruct::schema())),
         &config,
         Box::new(move |e| if running_clone.load(Ordering::Acquire) {
             panic!("{test_name_clone}: error: {e}")
@@ -195,7 +197,7 @@ outputs:
         .unwrap();
     assert!(controller.is_fault_tolerant());
 
-    let buffer_consumer = BufferConsumer::new(&output_topic, format, format_config);
+    let buffer_consumer = BufferConsumer::new(&output_topic, format, format_config, None);
 
     info!("{test_name}: Sending inputs");
     let producer = TestProducer::new();

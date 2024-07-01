@@ -29,9 +29,11 @@ use crate::{
     trace::Batch,
     InputHandle, OutputHandle,
 };
+
 use crate::{
     circuit::{
         cache::{CircuitCache, CircuitStoreMarker},
+        fingerprinter::Fingerprinter,
         metadata::OperatorMeta,
         operator_traits::{
             BinaryOperator, BinarySinkOperator, Data, ImportOperator, NaryOperator,
@@ -52,6 +54,7 @@ use crate::{
 use anyhow::Error as AnyError;
 use serde::Serialize;
 use std::{
+    any::type_name_of_val,
     borrow::Cow,
     cell::{Ref, RefCell, RefMut, UnsafeCell},
     collections::HashMap,
@@ -64,6 +67,7 @@ use std::{
     thread::panicking,
 };
 use typedmap::{TypedMap, TypedMapKey};
+use uuid::Uuid;
 
 /// Value stored in the stream.
 struct StreamValue<D> {
@@ -587,7 +591,10 @@ where
             local_node_id: self.local_node_id,
             origin_node_id: self.origin_node_id.clone(),
             circuit: self.circuit.clone(),
-            val: std::mem::transmute(self.val.clone()),
+            val: std::mem::transmute::<
+                Rc<UnsafeCell<StreamValue<D>>>,
+                Rc<UnsafeCell<StreamValue<D2>>>,
+            >(self.val.clone()),
         }
     }
 }
@@ -809,9 +816,20 @@ pub trait Node {
 
     fn map_nodes_recursive(&self, _f: &mut dyn FnMut(&dyn Node)) {}
 
+    fn map_nodes_recursive_mut(&self, _f: &mut dyn FnMut(&mut dyn Node)) {}
+
     /// Instructs the node to commit the state of its inner operator to
     /// persistent storage.
-    fn commit(&self, cid: u64) -> Result<(), DBSPError>;
+    fn commit(&self, cid: Uuid) -> Result<(), DBSPError>;
+
+    /// Instructs the node to restore the state of its inner operator to
+    /// the given checkpoint.
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError>;
+
+    /// Takes a fingerprint of the node's inner operator adds it to `fip`.
+    fn fingerprint(&self, fip: &mut Fingerprinter) {
+        fip.hash(type_name_of_val(self));
+    }
 }
 
 /// Id of an operator, guaranteed to be unique within a circuit.
@@ -1867,7 +1885,7 @@ where
 
 /// A circuit.
 ///
-/// A single implementation that can operate as the the top-level
+/// A single implementation that can operate as the top-level
 /// circuit when instantiated with `P = ()` or a nested circuit,
 /// with `P = ChildCircuit<..>` designating the parent circuit type.
 pub struct ChildCircuit<P>
@@ -2177,6 +2195,14 @@ where
         for node in self.inner().nodes.iter() {
             f(node.as_ref());
             node.map_nodes_recursive(f);
+        }
+    }
+
+    /// Recursively apply `f` to all nodes in `self` and its children mutably.
+    pub(crate) fn map_nodes_recursive_mut(&mut self, f: &mut dyn FnMut(&mut dyn Node)) {
+        for node in self.inner_mut().nodes.iter_mut() {
+            f(node.as_mut());
+            node.map_nodes_recursive_mut(f);
         }
     }
 
@@ -3202,8 +3228,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), DBSPError> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -3282,8 +3312,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), DBSPError> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -3368,8 +3402,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), DBSPError> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -3447,8 +3485,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), DBSPError> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -3546,8 +3588,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), DBSPError> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -3665,8 +3711,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), Error> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), Error> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -3788,8 +3838,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), Error> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), Error> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -3929,8 +3983,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), Error> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), Error> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -4055,8 +4113,12 @@ where
         self.operator.fixedpoint(scope)
     }
 
-    fn commit(&self, cid: u64) -> Result<(), Error> {
-        self.operator.commit(cid)
+    fn commit(&self, cid: Uuid) -> Result<(), Error> {
+        self.operator.commit(cid, self.global_id().persistent_id())
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        self.operator.restore(cid, self.global_id().persistent_id())
     }
 }
 
@@ -4163,8 +4225,12 @@ where
         unsafe { (*self.operator.get()).fixedpoint(scope) }
     }
 
-    fn commit(&self, cid: u64) -> Result<(), Error> {
-        unsafe { (*self.operator.get()).commit(cid) }
+    fn commit(&self, cid: Uuid) -> Result<(), Error> {
+        unsafe { (*self.operator.get()).commit(cid, self.global_id().persistent_id()) }
+    }
+
+    fn restore(&mut self, cid: Uuid) -> Result<(), DBSPError> {
+        unsafe { (*self.operator.get()).restore(cid, self.global_id().persistent_id()) }
     }
 }
 
@@ -4243,13 +4309,18 @@ where
         unsafe { (*self.operator.get()).fixedpoint(scope) }
     }
 
-    fn commit(&self, _cid: u64) -> Result<(), Error> {
+    fn commit(&self, _cid: Uuid) -> Result<(), Error> {
         // The Z-1 operator consists of two logical parts.
         // The first part gets invoked at the start of a clock cycle to retrieve the
         // state stored at the previous clock tick. The second one gets invoked
         // to store the updated state inside the operator. We only want to
         // invoke commit on one of them, doesn't matter which (so we
         // do it in FeedbackOutputNode)
+        Ok(())
+    }
+
+    fn restore(&mut self, _cid: Uuid) -> Result<(), DBSPError> {
+        // See comment in `commit`.
         Ok(())
     }
 }
@@ -4396,7 +4467,11 @@ where
         self.circuit.map_nodes_recursive(f);
     }
 
-    fn commit(&self, _cid: u64) -> Result<(), Error> {
+    fn commit(&self, _cid: Uuid) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn restore(&mut self, _cid: Uuid) -> Result<(), DBSPError> {
         Ok(())
     }
 }
@@ -4446,11 +4521,27 @@ impl CircuitHandle {
         self.executor.run(&self.circuit)
     }
 
-    pub fn commit(&mut self, cid: u64) -> Result<(), SchedulerError> {
+    pub fn commit(&mut self, cid: Uuid) -> Result<(), SchedulerError> {
         self.circuit.map_nodes_recursive(&mut |node: &dyn Node| {
             node.commit(cid).expect("committed");
         });
         Ok(())
+    }
+
+    pub fn restore(&mut self, cid: Uuid) -> Result<(), SchedulerError> {
+        self.circuit
+            .map_nodes_recursive_mut(&mut |node: &mut dyn Node| {
+                node.restore(cid).expect("restored");
+            });
+        Ok(())
+    }
+
+    pub fn fingerprint(&mut self) -> Result<u64, SchedulerError> {
+        let mut fip = Fingerprinter::default();
+        self.circuit.map_nodes_recursive(&mut |node: &dyn Node| {
+            node.fingerprint(&mut fip);
+        });
+        Ok(fip.finish())
     }
 
     /// Attach a scheduler event handler to the circuit.

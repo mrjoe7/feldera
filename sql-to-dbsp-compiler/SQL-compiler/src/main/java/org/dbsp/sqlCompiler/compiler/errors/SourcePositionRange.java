@@ -1,13 +1,12 @@
 package org.dbsp.sqlCompiler.compiler.errors;
 
 import org.apache.calcite.sql.parser.SqlParserPos;
+import org.dbsp.sqlCompiler.compiler.IHasSourcePositionRange;
 
 import javax.annotation.Nullable;
 
-/**
- * A range of characters inside the source code.
- */
-public class SourcePositionRange {
+/** A range of characters inside the source code. */
+public class SourcePositionRange implements IHasSourcePositionRange {
     public final SourcePosition start;
     public final SourcePosition end;
 
@@ -36,5 +35,10 @@ public class SourcePositionRange {
     @Override
     public String toString() {
         return this.start + "--" + this.end;
+    }
+
+    @Override
+    public SourcePositionRange getPositionRange() {
+        return this;
     }
 }

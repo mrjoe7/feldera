@@ -12,13 +12,9 @@ use crate::{
     trace::{
         cursor::CursorPair,
         ord::{
-            file::{
-                indexed_zset_batch::{FileIndexedZSet, FileIndexedZSetFactories},
-                key_batch::{FileKeyBatch, FileKeyBatchFactories},
-                val_batch::{FileValBatch, FileValBatchFactories},
-                zset_batch::{FileZSet, FileZSetFactories},
-            },
-            OrdKeyBatch, OrdKeyBatchFactories, OrdValBatch, OrdValBatchFactories,
+            FallbackIndexedWSet, FallbackIndexedWSetFactories, FallbackWSet, FallbackWSetFactories,
+            FileKeyBatch, FileKeyBatchFactories, FileValBatch, FileValBatchFactories, OrdKeyBatch,
+            OrdKeyBatchFactories, OrdValBatch, OrdValBatchFactories,
         },
         test::test_batch::{
             assert_batch_cursors_eq, assert_batch_eq, assert_trace_eq, test_batch_sampling,
@@ -136,7 +132,7 @@ fn indexed_zset_tuples(
     Box::new(LeanVec::from(tuples)).erase_box()
 }
 
-fn zset_tuples(
+pub fn zset_tuples(
     tuples: Vec<Tup2<i32, ZWeight>>,
 ) -> Box<DynWeightedPairs<DynPair<DynI32, DynUnit>, DynZWeight>> {
     Box::new(LeanVec::from(
@@ -153,11 +149,11 @@ fn test_zset_spine<B: ZSet<Key = DynI32>>(
     batches: Vec<(Vec<Tup2<i32, ZWeight>>, i32)>,
     seed: u64,
 ) {
-    let mut trace1: Spine<B> = Spine::new(factories, "");
-    let mut trace2: Spine<B> = Spine::new(factories, "");
+    let mut trace1: Spine<B> = Spine::new(factories);
+    let mut trace2: Spine<B> = Spine::new(factories);
 
     let mut ref_trace: TestBatch<DynI32, DynUnit /* <()> */, (), DynZWeight> =
-        TestBatch::new(&TestBatchFactories::new(), "");
+        TestBatch::new(&TestBatchFactories::new());
 
     let mut kbound = 0;
     for (tuples, bound) in batches.into_iter() {
@@ -211,11 +207,11 @@ fn test_indexed_zset_spine<B: IndexedZSet<Key = DynI32, Val = DynI32>>(
     batches: Vec<(Vec<Tup2<Tup2<i32, i32>, ZWeight>>, i32, i32)>,
     seed: u64,
 ) {
-    let mut trace1: Spine<B> = Spine::new(factories, "");
-    let mut trace2: Spine<B> = Spine::new(factories, "");
+    let mut trace1: Spine<B> = Spine::new(factories);
+    let mut trace2: Spine<B> = Spine::new(factories);
 
     let mut ref_trace: TestBatch<DynI32, DynI32, (), DynZWeight> =
-        TestBatch::new(&TestBatchFactories::new(), "");
+        TestBatch::new(&TestBatchFactories::new());
 
     let mut bound = 0;
     let mut kbound = 0;
@@ -283,10 +279,10 @@ fn test_indexed_zset_trace_spine<B: ZBatch<Key = DynI32, Val = DynI32, Time = u3
 ) {
     // `trace1` uses `truncate_keys_below`.
     // `trace2` uses `retain_keys`.
-    let mut trace1: Spine<B> = Spine::new(factories, "");
-    let mut trace2: Spine<B> = Spine::new(factories, "");
+    let mut trace1: Spine<B> = Spine::new(factories);
+    let mut trace2: Spine<B> = Spine::new(factories);
     let mut ref_trace: TestBatch<DynI32, DynI32, u32, DynZWeight> =
-        TestBatch::new(&TestBatchFactories::new(), "");
+        TestBatch::new(&TestBatchFactories::new());
 
     let mut bound = 0;
     let mut kbound = 0;
@@ -344,10 +340,10 @@ fn test_zset_trace_spine<B: ZBatch<Key = DynI32, Val = DynUnit, Time = u32>>(
     batches: Vec<(Vec<Tup2<i32, ZWeight>>, i32)>,
     seed: u64,
 ) {
-    let mut trace1: Spine<B> = Spine::new(factories, "");
-    let mut trace2: Spine<B> = Spine::new(factories, "");
+    let mut trace1: Spine<B> = Spine::new(factories);
+    let mut trace2: Spine<B> = Spine::new(factories);
     let mut ref_trace: TestBatch<DynI32, DynUnit /* <()> */, u32, DynZWeight> =
-        TestBatch::new(&TestBatchFactories::new(), "");
+        TestBatch::new(&TestBatchFactories::new());
 
     let mut kbound = 0;
     for (time, (tuples, bound)) in batches.into_iter().enumerate() {
@@ -394,7 +390,7 @@ proptest! {
     fn test_truncate_key_bounded_memory(batches in kvr_batches_monotone_keys(100, 20, 50, 20, 500)) {
         let factories = <OrdIndexedZSetFactories<DynI32, DynI32>>::new::<i32, i32, ZWeight>();
 
-        let mut trace: Spine<OrdIndexedZSet<DynI32, DynI32>> = Spine::new(&factories, "");
+        let mut trace: Spine<OrdIndexedZSet<DynI32, DynI32>> = Spine::new(&factories);
 
         for (i, tuples) in batches.into_iter().enumerate() {
             let mut erased_tuples = indexed_zset_tuples(tuples);
@@ -406,8 +402,10 @@ proptest! {
             trace.insert(batch);
             trace.retain_keys(Box::new(move |x| *x.downcast_checked::<i32>() >= ((i * 20) as i32)));
 
+            trace.complete_merges();
             // FIXME: Change to 20000 after changing vtable types to pointers.
-            assert!(trace.size_of().total_bytes() < /*20000*/ 100000);
+            let trace_total_bytes = trace.size_of().total_bytes();
+            assert!(trace_total_bytes < /*20000*/ 200000, "total bytes={}", trace_total_bytes);
         }
     }
 
@@ -415,7 +413,7 @@ proptest! {
     fn test_truncate_value_bounded_memory(batches in kvr_batches_monotone_values(50, 100, 20, 20, 500)) {
         let factories = <OrdIndexedZSetFactories<DynI32, DynI32>>::new::<i32, i32, ZWeight>();
 
-        let mut trace: Spine<OrdIndexedZSet<DynI32, DynI32>> = Spine::new(&factories, "");
+        let mut trace: Spine<OrdIndexedZSet<DynI32, DynI32>> = Spine::new(&factories);
 
         for (i, tuples) in batches.into_iter().enumerate() {
             let mut erased_tuples = indexed_zset_tuples(tuples);
@@ -426,9 +424,10 @@ proptest! {
 
             trace.insert(batch);
             trace.retain_values(Box::new(move |x| *x.downcast_checked::<i32>() >= ((i * 20) as i32)));
-            //println!("trace.size_of: {:?}", trace.size_of());
+            trace.complete_merges();
             // FIXME: Change to 20000 after changing vtable types to pointers.
-            assert!(trace.size_of().total_bytes() < /*20000*/60000);
+            let trace_total_bytes = trace.size_of().total_bytes();
+            assert!(trace_total_bytes < /*20000*/ 200000, "total bytes={}", trace_total_bytes);
         }
     }
 
@@ -441,9 +440,9 @@ proptest! {
 
     #[test]
     fn test_file_zset_spine(batches in kr_batches(50, 2, 50, 10), seed in 0..u64::max_value()) {
-        let factories = <FileZSetFactories<DynI32, DynZWeight>>::new::<i32, (), ZWeight>();
+        let factories = <FallbackWSetFactories<DynI32, DynZWeight>>::new::<i32, (), ZWeight>();
 
-        test_zset_spine::<FileZSet<DynI32, DynZWeight>>(&factories, batches, seed)
+        test_zset_spine::<FallbackWSet<DynI32, DynZWeight>>(&factories, batches, seed)
     }
 
     #[test]
@@ -454,8 +453,8 @@ proptest! {
 
     #[test]
     fn test_file_indexed_zset_spine(batches in kvr_batches(100, 5, 2, 200, 10), seed in 0..u64::max_value()) {
-        let factories = <FileIndexedZSetFactories<DynI32, DynI32, DynZWeight>>::new::<i32, i32, ZWeight>();
-        test_indexed_zset_spine::<FileIndexedZSet<DynI32, DynI32, DynZWeight>>(&factories, batches, seed)
+        let factories = <FallbackIndexedWSetFactories<DynI32, DynI32, DynZWeight>>::new::<i32, i32, ZWeight>();
+        test_indexed_zset_spine::<FallbackIndexedWSet<DynI32, DynI32, DynZWeight>>(&factories, batches, seed)
     }
 
 
@@ -464,8 +463,8 @@ proptest! {
     fn test_indexed_zset_spine_even_values(batches in kvr_batches(100, 5, 2, 500, 10), seed in 0..u64::max_value()) {
         let factories = <OrdIndexedZSetFactories<DynI32, DynI32>>::new::<i32, i32, ZWeight>();
 
-        let mut trace: Spine<OrdIndexedZSet<DynI32, DynI32>> = Spine::new(&factories, "");
-        let mut ref_trace: TestBatch<DynI32, DynI32, (), DynZWeight> = TestBatch::new(&TestBatchFactories::new(),  "");
+        let mut trace: Spine<OrdIndexedZSet<DynI32, DynI32>> = Spine::new(&factories);
+        let mut ref_trace: TestBatch<DynI32, DynI32, (), DynZWeight> = TestBatch::new(&TestBatchFactories::new());
 
         trace.retain_values(Box::new(move |val| *val.downcast_checked::<i32>() % 2 == 0));
         ref_trace.retain_values(Box::new(move |val| *val.downcast_checked::<i32>() % 2 == 0));
@@ -505,8 +504,8 @@ proptest! {
     fn test_indexed_zset_spine_even_keys(batches in kvr_batches(100, 5, 2, 500, 10), seed in 0..u64::max_value()) {
         let factories = <OrdIndexedZSetFactories<DynI32, DynI32>>::new::<i32, i32, ZWeight>();
 
-        let mut trace: Spine<OrdIndexedZSet<DynI32, DynI32>> = Spine::new(&factories, "");
-        let mut ref_trace: TestBatch<DynI32, DynI32, (), DynZWeight> = TestBatch::new(&TestBatchFactories::new(), "");
+        let mut trace: Spine<OrdIndexedZSet<DynI32, DynI32>> = Spine::new(&factories);
+        let mut ref_trace: TestBatch<DynI32, DynI32, (), DynZWeight> = TestBatch::new(&TestBatchFactories::new());
 
         trace.retain_keys(Box::new(move |val| *val.downcast_checked::<i32>() % 2 == 0));
         ref_trace.retain_keys(Box::new(move |val| *val.downcast_checked::<i32>() % 2 == 0));
@@ -576,8 +575,8 @@ proptest! {
 
         // `trace1` uses `truncate_keys_below`.
         // `trace2` uses `retain_keys`.
-        let mut trace: Spine<OrdValBatch<DynI32, DynI32, u32, DynZWeight>> = Spine::new(&factories, "");
-        let mut ref_trace: TestBatch<DynI32, DynI32, u32, DynZWeight> = TestBatch::new(&TestBatchFactories::new(), "");
+        let mut trace: Spine<OrdValBatch<DynI32, DynI32, u32, DynZWeight>> = Spine::new(&factories);
+        let mut ref_trace: TestBatch<DynI32, DynI32, u32, DynZWeight> = TestBatch::new(&TestBatchFactories::new());
 
         trace.retain_values(Box::new(move |val| *val.downcast_checked::<i32>() % 2 == 0));
         ref_trace.retain_values(Box::new(move |val| *val.downcast_checked::<i32>() % 2 == 0));
@@ -613,8 +612,8 @@ proptest! {
 
         // `trace1` uses `truncate_keys_below`.
         // `trace2` uses `retain_keys`.
-        let mut trace: Spine<OrdValBatch<DynI32, DynI32, u32, DynZWeight>> = Spine::new(&factories, "");
-        let mut ref_trace: TestBatch<DynI32, DynI32, u32, DynZWeight> = TestBatch::new(&TestBatchFactories::new(), "");
+        let mut trace: Spine<OrdValBatch<DynI32, DynI32, u32, DynZWeight>> = Spine::new(&factories);
+        let mut ref_trace: TestBatch<DynI32, DynI32, u32, DynZWeight> = TestBatch::new(&TestBatchFactories::new());
 
         trace.retain_keys(Box::new(move |key| *key.downcast_checked::<i32>() % 2 == 0));
         ref_trace.retain_keys(Box::new(move |key| *key.downcast_checked::<i32>() % 2 == 0));

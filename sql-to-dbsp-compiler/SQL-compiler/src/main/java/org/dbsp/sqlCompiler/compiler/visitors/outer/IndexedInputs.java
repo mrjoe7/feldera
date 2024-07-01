@@ -6,9 +6,9 @@ import org.dbsp.sqlCompiler.circuit.operator.DBSPSourceMapOperator;
 import org.dbsp.sqlCompiler.compiler.InputColumnMetadata;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,8 +44,7 @@ public class IndexedInputs extends CircuitCloneVisitor {
         DBSPTypeIndexedZSet ix = new DBSPTypeIndexedZSet(node.getNode(), keyType, inputType.elementType);
         DBSPSourceMapOperator set = new DBSPSourceMapOperator(
                 node.getNode(), node.sourceName, keyColumnFields,
-                ix, node.originalRowType, node.comment,
-                node.metadata, node.tableName);
+                ix, node.originalRowType, node.metadata, node.tableName, node.comment);
         this.addOperator(set);
         DBSPDeindexOperator deindex = new DBSPDeindexOperator(node.getNode(), set);
         this.map(node, deindex);

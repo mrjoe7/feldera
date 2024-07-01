@@ -8,27 +8,31 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.calcite.rel.externalize.RelJson;
 import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.util.JsonBuilder;
+import org.dbsp.sqlCompiler.compiler.IHasCalciteObject;
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.frontend.TypeCompiler;
 import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.RelColumnMetadata;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeStruct;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
+import org.dbsp.util.Utilities;
 
-import java.util.ArrayList;
+import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Map;
 
 /** An interface implemented by objects which have a name and a schema */
-public interface IHasSchema {
-    /** The Calcite objects from which this object has been created. */
-    CalciteObject getNode();
+public interface IHasSchema extends IHasCalciteObject {
     /** The name of this object */
     String getName();
     /** True if the name is quoted */
     boolean nameIsQuoted();
     /** The list of columns of this object */
     List<RelColumnMetadata> getColumns();
+    /** Properties describing the connector attached to this object */
+    @Nullable
+    Map<String, String> getProperties();
 
     /** Return the index of the specified column. */
     default int getColumnIndex(SqlIdentifier id) {
@@ -41,7 +45,7 @@ public interface IHasSchema {
     }
 
     default JsonNode asJson() {
-        ObjectMapper mapper = new ObjectMapper();
+        ObjectMapper mapper = Utilities.deterministicObjectMapper();
         ObjectNode result = mapper.createObjectNode();
         result.put("name", this.getName());
         result.put("case_sensitive", this.nameIsQuoted());
@@ -69,20 +73,24 @@ public interface IHasSchema {
         }
         if (hasKey)
             result.set("primary_key", keyFields);
+        Map<String, String> props = this.getProperties();
+        if (props != null) {
+            ObjectNode properties = mapper.createObjectNode();
+            for (Map.Entry<String, String> entry: props.entrySet()) {
+                properties.put(entry.getKey(), entry.getValue());
+            }
+            result.set("properties", properties);
+        }
         return result;
     }
 
     default DBSPTypeStruct getRowTypeAsStruct(TypeCompiler compiler) {
-        List<DBSPTypeStruct.Field> fields = new ArrayList<>();
-        for (RelColumnMetadata col: this.getColumns()) {
-            DBSPType fType = compiler.convertType(col.getType(), true);
-            fields.add(new DBSPTypeStruct.Field(
-                    col.node, col.getName(), col.getName(), fType, col.nameIsQuoted));
-        }
-        return new DBSPTypeStruct(this.getNode(), this.getName(), null, fields);
+        return compiler.convertType(this.getNode(), this.getName(), this.getColumns(), true, false)
+                .to(DBSPTypeStruct.class);
     }
 
     default DBSPTypeTuple getRowTypeAsTuple(TypeCompiler compiler) {
-        return this.getRowTypeAsStruct(compiler).toTuple();
+        DBSPType type = compiler.convertType(this.getNode(), this.getName(), this.getColumns(), false, false);
+        return type.to(DBSPTypeTuple.class);
     }
 }

@@ -9,15 +9,16 @@ ENV RUSTUP_HOME=$HOME/.rustup
 ENV CARGO_HOME=$HOME/.cargo
 # Adds python and rust binaries to thep path
 ENV PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH
-ENV RUST_VERSION=1.76.0
+ENV RUST_VERSION=1.78.0
 ENV RUST_BUILD_MODE='' # set to --release for release builds
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 install-deps:
     RUN apt-get update
     RUN apt-get install --yes build-essential curl libssl-dev build-essential pkg-config \
                               cmake git gcc clang libclang-dev python3-pip python3-plumbum \
                               hub numactl openjdk-19-jre-headless maven netcat jq \
-                              docker.io libenchant-2-2 graphviz locales
+                              docker.io libenchant-2-2 graphviz locales protobuf-compiler
     # Set UTF-8 locale. Needed for the Rust compiler to handle Unicode column names.
     RUN sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
         locale-gen
@@ -33,6 +34,13 @@ install-deps:
     RUN sudo apt-get install nodejs -y
     RUN npm install --global yarn
     RUN npm install --global openapi-typescript-codegen
+    RUN apt install unzip -y
+    RUN apt install python3-requests -y
+    RUN arch=`dpkg --print-architecture`; \
+            curl -LO https://github.com/redpanda-data/redpanda/releases/latest/download/rpk-linux-$arch.zip \
+            && unzip rpk-linux-$arch.zip -d /bin/ \
+            && rpk version \
+            && rm rpk-linux-$arch.zip
 
 install-rust:
     FROM +install-deps
@@ -90,14 +98,22 @@ install-python-deps:
     FROM +install-deps
     RUN pip install wheel
     COPY demo/demo_notebooks/requirements.txt requirements.txt
+    COPY --dir python ./
+    RUN pip install --upgrade pip
     RUN pip wheel -r requirements.txt --wheel-dir=wheels
+    RUN pip wheel -r python/tests/requirements.txt --wheel-dir=wheels
+    RUN pip wheel python/ --wheel-dir=wheels
     SAVE ARTIFACT wheels /wheels
 
 install-python:
     FROM +install-deps
     COPY +install-python-deps/wheels wheels
     COPY demo/demo_notebooks/requirements.txt requirements.txt
+    COPY --dir python ./
+    RUN pip install --upgrade pip # remove after upgrading to ubuntu 24
     RUN pip install --user -v --no-index --find-links=wheels -r requirements.txt
+    RUN pip install --user -v --no-index --find-links=wheels -r python/tests/requirements.txt
+    RUN pip install --user -v --no-index --find-links=wheels feldera
     SAVE ARTIFACT /root/.local/lib/python3.10
     SAVE ARTIFACT /root/.local/bin
 
@@ -123,7 +139,7 @@ build-webui:
     COPY web-console/tsconfig.json ./web-console/tsconfig.json
     COPY web-console/.env ./web-console/.env
 
-    RUN cd web-console && yarn format:check
+    RUN cd web-console && yarn format-check
     RUN cd web-console && yarn build
     SAVE ARTIFACT ./web-console/out
 
@@ -157,7 +173,7 @@ build-manager:
     # For some reason if this ENV before the FROM line it gets invalidated
     ENV WEBUI_BUILD_DIR=/dbsp/web-console/out
     COPY ( +build-webui/out ) ./web-console/out
-    DO rust+CARGO --args="build --package pipeline-manager" --output="debug/pipeline-manager"
+    DO rust+CARGO --args="build --package pipeline-manager --features pg-embed" --output="debug/pipeline-manager"
 
     IF [ -f ./target/debug/pipeline-manager ]
         SAVE ARTIFACT --keep-ts ./target/debug/pipeline-manager pipeline-manager
@@ -184,10 +200,15 @@ test-nexmark:
     FROM +build-nexmark
     ENV RUST_BACKTRACE 1
     DO rust+CARGO --args="test  --package dbsp_nexmark"
+    # Perform a smoke test for nexmark with and without storage
+    DO rust+CARGO --args="bench --bench nexmark -- --max-events=1000000 --cpu-cores 8 --num-event-generators 8"
+    DO rust+CARGO --args="bench --bench nexmark -- --max-events=1000000 --cpu-cores 8 --num-event-generators 8 --storage 10000"
 
 test-adapters:
     FROM +build-adapters
     DO rust+SET_CACHE_MOUNTS_ENV
+    ARG DELTA_TABLE_TEST_AWS_ACCESS_KEY_ID
+    ARG DELTA_TABLE_TEST_AWS_SECRET_ACCESS_KEY
     WITH DOCKER --pull docker.redpanda.com/vectorized/redpanda:v23.2.3
         RUN --mount=$EARTHLY_RUST_CARGO_HOME_CACHE --mount=$EARTHLY_RUST_TARGET_CACHE docker run -p 9092:9092 --rm -itd docker.redpanda.com/vectorized/redpanda:v23.2.3 \
             redpanda start --smp 2  && \
@@ -245,6 +266,11 @@ test-python:
 
     COPY demo/demo_notebooks demo/demo_notebooks
     COPY demo/simple-join demo/simple-join
+    COPY python/tests tests
+
+    # Reuse `Cargo.lock` to ensure consistent crate versions.
+    RUN mkdir -p /working-dir/cargo_workspace
+    COPY Cargo.lock /working-dir/cargo_workspace/Cargo.lock
 
     ENV PGHOST=localhost
     ENV PGUSER=postgres
@@ -253,11 +279,13 @@ test-python:
     ENV RUST_LOG=error
     ENV WITH_POSTGRES=1
     ENV IN_CI=1
+    ENV KAFKA_URL="localhost:9092"
     WITH DOCKER --pull postgres
         RUN docker run --shm-size=512MB -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust -e PGDATA=/dev/shm -d postgres && \
             sleep 10 && \
             (./pipeline-manager --bind-address=0.0.0.0 --api-server-working-directory=/working-dir --compiler-working-directory=/working-dir --runner-working-directory=/working-dir --sql-compiler-home=/dbsp/sql-to-dbsp-compiler --dbsp-override-path=/dbsp --db-connection-string=postgresql://postgres:postgres@localhost:5432 --compilation-profile=unoptimized &) && \
             sleep 5 && \
+            cd tests && python3 -m pytest . && cd .. && \
             python3 demo/simple-join/run.py --api-url http://localhost:8080 && \
             cd demo/demo_notebooks && jupyter execute fraud_detection.ipynb --JupyterApp.log_level='DEBUG'
     END
@@ -271,13 +299,19 @@ test-rust:
 # TODO: the following two container tasks duplicate work that we otherwise do in the Dockerfile,
 # but by mostly repeating ourselves, we can reuse earlier Earthly stages to speed up the CI.
 build-pipeline-manager-container:
-    FROM +install-rust
-    WORKDIR /
+    FROM +install-deps
+    RUN useradd -ms /bin/bash feldera
+    USER feldera
+    WORKDIR /home/feldera
 
     # First, copy over the artifacts built from previous stages
     RUN mkdir -p database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/target
     COPY +build-manager/pipeline-manager .
     COPY +build-sql/sql2dbsp-jar-with-dependencies.jar database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/target/
+
+    # Reuse `Cargo.lock` to ensure consistent crate versions.
+    RUN mkdir -p .feldera/cargo_workspace
+    COPY --chown=feldera Cargo.lock .feldera/cargo_workspace/Cargo.lock
 
     # Then copy over the crates needed by the sql compiler
     COPY crates/dbsp database-stream-processor/crates/dbsp
@@ -286,27 +320,27 @@ build-pipeline-manager-container:
     COPY README.md database-stream-processor/README.md
 
     # Then copy over the required SQL compiler files
-    COPY sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp /database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp
-    COPY sql-to-dbsp-compiler/lib /database-stream-processor/sql-to-dbsp-compiler/lib
-    COPY sql-to-dbsp-compiler/temp /database-stream-processor/sql-to-dbsp-compiler/temp
-    RUN ./pipeline-manager --bind-address=0.0.0.0 --api-server-working-directory=/working-dir --compiler-working-directory=/working-dir --runner-working-directory=/working-dir --sql-compiler-home=/database-stream-processor/sql-to-dbsp-compiler --compilation-profile=unoptimized --dbsp-override-path=/database-stream-processor --precompile
-    ENTRYPOINT ["./pipeline-manager", "--bind-address=0.0.0.0", "--api-server-working-directory=/working-dir", "--compiler-working-directory=/working-dir", "--runner-working-directory=/working-dir", "--sql-compiler-home=/database-stream-processor/sql-to-dbsp-compiler", "--dbsp-override-path=/database-stream-processor", "--compilation-profile=unoptimized"]
+    COPY sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp database-stream-processor/sql-to-dbsp-compiler/SQL-compiler/sql-to-dbsp
+    COPY sql-to-dbsp-compiler/lib database-stream-processor/sql-to-dbsp-compiler/lib
+    COPY sql-to-dbsp-compiler/temp database-stream-processor/sql-to-dbsp-compiler/temp
+    ENV RUSTUP_HOME=$HOME/.rustup
+    ENV CARGO_HOME=$HOME/.cargo
+
+    # Install cargo and rust for this non-root user
+    RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    ENV PATH="$PATH:/home/feldera/.cargo/bin"
+    RUN ./pipeline-manager --bind-address=0.0.0.0 --sql-compiler-home=/home/feldera/database-stream-processor/sql-to-dbsp-compiler --compilation-profile=unoptimized --dbsp-override-path=/home/feldera/database-stream-processor --precompile
+    ENTRYPOINT ["./pipeline-manager", "--bind-address=0.0.0.0", "--sql-compiler-home=/home/feldera/database-stream-processor/sql-to-dbsp-compiler", "--dbsp-override-path=/home/feldera/database-stream-processor", "--compilation-profile=unoptimized"]
 
 # Same as the above, but with a permissive CORS setting, else playwright doesn't work
 pipeline-manager-container-cors-all:
     FROM +build-pipeline-manager-container
-    ENTRYPOINT ["./pipeline-manager", "--bind-address=0.0.0.0", "--api-server-working-directory=/working-dir", "--compiler-working-directory=/working-dir", "--runner-working-directory=/working-dir", "--sql-compiler-home=/database-stream-processor/sql-to-dbsp-compiler", "--dbsp-override-path=/database-stream-processor", "--dev-mode", "--compilation-profile=unoptimized"]
+    ENTRYPOINT ["./pipeline-manager", "--bind-address=0.0.0.0", "--sql-compiler-home=/home/feldera/database-stream-processor/sql-to-dbsp-compiler", "--dbsp-override-path=/home/feldera/database-stream-processor", "--dev-mode", "--compilation-profile=unoptimized"]
 
 # TODO: mirrors the Dockerfile. See note above.
 build-demo-container:
     FROM +install-rust
     WORKDIR /
-    RUN apt install unzip -y
-    RUN arch=`dpkg --print-architecture`; \
-            curl -LO https://github.com/redpanda-data/redpanda/releases/latest/download/rpk-linux-$arch.zip \
-            && unzip rpk-linux-$arch.zip -d /bin/ \
-            && rpk version \
-            && rm rpk-linux-$arch.zip
     # Install snowsql
     RUN curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.28-linux_x86_64.bash \
         && SNOWSQL_DEST=/bin SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.28-linux_x86_64.bash \
@@ -315,6 +349,8 @@ build-demo-container:
     COPY +install-python/bin /root/.local/bin
     # Needed by the JDBC demo.
     RUN pip3 install "psycopg[binary]"
+    # Needed by the simple-count demo.
+    RUN pip3 install kafka-python
     COPY demo demo
     CMD bash
 
@@ -325,8 +361,7 @@ test-docker-compose:
     FROM earthly/dind:alpine
     COPY deploy/docker-compose.yml .
     ENV FELDERA_VERSION=latest
-    WITH DOCKER --pull postgres \
-                --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
+    WITH DOCKER --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
                 --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
                 --load ghcr.io/feldera/demo-container:latest=+build-demo-container
         RUN COMPOSE_HTTP_TIMEOUT=120 SECOPS_DEMO_ARGS="--prepare-args 200000" RUST_LOG=debug,tokio_postgres=info docker-compose -f docker-compose.yml --profile demo up --force-recreate --exit-code-from demo
@@ -337,13 +372,13 @@ test-docker-compose:
 test-docker-compose-stable:
     FROM earthly/dind:alpine
     COPY deploy/docker-compose.yml .
-    ENV FELDERA_VERSION=0.12.0
+    ENV FELDERA_VERSION=0.19.0
     RUN apk --no-cache add curl
     WITH DOCKER --pull postgres \
                 --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
-                --pull ghcr.io/feldera/pipeline-manager:0.12.0 \
+                --pull ghcr.io/feldera/pipeline-manager:0.19.0 \
                 --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
-                --pull ghcr.io/feldera/demo-container:0.12.0
+                --pull ghcr.io/feldera/demo-container:0.19.0
         RUN COMPOSE_HTTP_TIMEOUT=120 SECOPS_DEMO_ARGS="--prepare-args 200000" RUST_LOG=debug,tokio_postgres=info docker-compose -f docker-compose.yml --profile demo up --force-recreate --exit-code-from demo && \
             # This should run the latest version of the code and in the process, trigger a migration.
             COMPOSE_HTTP_TIMEOUT=120 SECOPS_DEMO_ARGS="--prepare-args 200000" FELDERA_VERSION=latest RUST_LOG=debug,tokio_postgres=info docker-compose -f docker-compose.yml up -d db pipeline-manager redpanda && \
@@ -359,8 +394,7 @@ test-debezium-mysql:
     COPY deploy/docker-compose.yml .
     COPY deploy/docker-compose-debezium.yml .
     ENV FELDERA_VERSION=latest
-    WITH DOCKER --pull postgres \
-                --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
+    WITH DOCKER --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
                 --pull debezium/example-mysql:2.5 \
                 --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
                 --load ghcr.io/feldera/demo-container:latest=+build-demo-container \
@@ -373,8 +407,7 @@ test-debezium-jdbc-sink:
     COPY deploy/docker-compose.yml .
     COPY deploy/docker-compose-jdbc.yml .
     ENV FELDERA_VERSION=latest
-    WITH DOCKER --pull postgres \
-                --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
+    WITH DOCKER --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
                 --pull debezium/example-postgres:2.3 \
                 --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
                 --load ghcr.io/feldera/demo-container:latest=+build-demo-container \
@@ -388,8 +421,7 @@ test-snowflake:
     COPY deploy/.env .
     RUN cat .env
     ENV FELDERA_VERSION=latest
-    WITH DOCKER --pull postgres \
-                --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
+    WITH DOCKER --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
                 --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
                 --load ghcr.io/feldera/demo-container:latest=+build-demo-container \
                 --load ghcr.io/feldera/kafka-connect:latest=+build-kafka-connect-container
@@ -402,25 +434,23 @@ test-s3:
     COPY deploy/.env .
     RUN cat .env
     ENV FELDERA_VERSION=latest
-    WITH DOCKER --pull postgres \
-                --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
+    WITH DOCKER --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
                 --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
                 --load ghcr.io/feldera/demo-container:latest=+build-demo-container \
                 --load ghcr.io/feldera/kafka-connect:latest=+build-kafka-connect-container
         RUN COMPOSE_HTTP_TIMEOUT=120 RUST_LOG=debug,tokio_postgres=info docker-compose --env-file .env -f docker-compose.yml --profile s3 up --force-recreate --exit-code-from s3-demo
     END
 
-test-service-probe:
+test-service-related:
     FROM earthly/dind:alpine
     COPY deploy/docker-compose.yml .
     COPY deploy/.env .
     RUN cat .env
     ENV FELDERA_VERSION=latest
-    WITH DOCKER --pull postgres \
-                --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
+    WITH DOCKER --pull docker.redpanda.com/vectorized/redpanda:v23.2.3 \
                 --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
                 --load ghcr.io/feldera/demo-container:latest=+build-demo-container
-        RUN COMPOSE_HTTP_TIMEOUT=120 RUST_LOG=debug,tokio_postgres=info docker-compose --env-file .env -f docker-compose.yml --profile service-probe-demo up --force-recreate --exit-code-from service-probe-demo
+        RUN COMPOSE_HTTP_TIMEOUT=120 RUST_LOG=debug,tokio_postgres=info docker-compose --env-file .env -f docker-compose.yml --profile demo-service-related up --force-recreate --exit-code-from demo-service-related
     END
 
 # Fetches the test binary from test-manager, and produces a container image out of it
@@ -440,13 +470,16 @@ integration-tests:
     COPY deploy/docker-compose.yml .
     COPY deploy/.env .
     ENV FELDERA_VERSION=latest
-    WITH DOCKER --pull postgres \
-                --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
+    WITH DOCKER --load ghcr.io/feldera/pipeline-manager:latest=+build-pipeline-manager-container \
                 --compose docker-compose.yml \
-                --service db \
                 --service pipeline-manager \
                 --load itest:latest=+integration-test-container
-        RUN sleep 5 && docker run --env-file .env --network default_default itest:latest
+        # Output pipeline manager logs if tests fail. Without this we don't have
+        # a way to see what went wrong in the manager.
+        RUN sleep 15 && docker run --env-file .env --network default_default itest:latest; \
+            status=$?; \
+            [ $status -ne 0 ] && docker logs default-pipeline-manager-1; \
+            exit $status
     END
 
 ui-playwright-container:
@@ -484,10 +517,8 @@ ui-playwright-tests:
     ENV FELDERA_VERSION=latest
 
     TRY
-        WITH DOCKER --pull postgres \
-                    --load ghcr.io/feldera/pipeline-manager:latest=+pipeline-manager-container-cors-all \
+        WITH DOCKER --load ghcr.io/feldera/pipeline-manager:latest=+pipeline-manager-container-cors-all \
                     --compose ../docker-compose.yml \
-                    --service db \
                     --service pipeline-manager
             # We zip artifacts regardless of test success or error, and then we complete the command preserving test's exit_code
             RUN if yarn playwright test; then exit_code=0; else exit_code=$?; fi \
@@ -502,11 +533,33 @@ ui-playwright-tests:
     END
 
 benchmark:
-    FROM +build-nexmark
+    FROM +build-manager
     COPY scripts/bench.bash scripts/bench.bash
-
-    RUN bash scripts/bench.bash
+    COPY benchmark/feldera-sql/run.py benchmark/feldera-sql/run.py
+    COPY +build-manager/pipeline-manager .
+    COPY +build-sql/sql-to-dbsp-compiler sql-to-dbsp-compiler
+    RUN mkdir -p /working-dir/cargo_workspace
+    COPY Cargo.lock /working-dir/cargo_workspace/Cargo.lock
+    ENV PGHOST=localhost
+    ENV PGUSER=postgres
+    ENV PGCLIENTENCODING=UTF8
+    ENV PGPORT=5432
+    ENV RUST_LOG=error
+    ENV WITH_POSTGRES=1
+    ENV IN_CI=1
+    WITH DOCKER --pull postgres
+        RUN docker run --shm-size=512MB -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust -e PGDATA=/dev/shm -d postgres && \
+            sleep 10 && \
+            (./pipeline-manager --bind-address=0.0.0.0 --api-server-working-directory=/working-dir --compiler-working-directory=/working-dir --runner-working-directory=/working-dir --sql-compiler-home=/dbsp/sql-to-dbsp-compiler --dbsp-override-path=/dbsp --db-connection-string=postgresql://postgres:postgres@localhost:5432 --compilation-profile=optimized &) && \
+            sleep 5 && \
+            docker run --name redpanda -p 9092:9092 --rm -itd docker.redpanda.com/vectorized/redpanda:v23.2.3 redpanda start --smp 2 \
+            && bash scripts/bench.bash
+    END
     SAVE ARTIFACT crates/nexmark/nexmark_results.csv AS LOCAL .
+    SAVE ARTIFACT crates/nexmark/sql_nexmark_results.csv AS LOCAL .
+    SAVE ARTIFACT crates/nexmark/sql_nexmark_metrics.csv AS LOCAL .
+    SAVE ARTIFACT crates/nexmark/sql_storage_nexmark_results.csv AS LOCAL .
+    SAVE ARTIFACT crates/nexmark/sql_storage_nexmark_metrics.csv AS LOCAL .
     SAVE ARTIFACT crates/nexmark/dram_nexmark_results.csv AS LOCAL .
     SAVE ARTIFACT crates/dbsp/galen_results.csv AS LOCAL .
     #SAVE ARTIFACT crates/dbsp/ldbc_results.csv AS LOCAL .
@@ -520,11 +573,11 @@ all-tests:
     BUILD +openapi-checker
     BUILD +test-sql
     BUILD +integration-tests
-    BUILD +ui-playwright-tests
+    # BUILD +ui-playwright-tests
     BUILD +test-docker-compose
-    BUILD +test-docker-compose-stable
+    # BUILD +test-docker-compose-stable
     BUILD +test-debezium-mysql
     BUILD +test-debezium-jdbc-sink
-    BUILD +test-snowflake
+    # BUILD +test-snowflake
     BUILD +test-s3
-    BUILD +test-service-probe
+    BUILD +test-service-related

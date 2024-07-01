@@ -29,7 +29,7 @@ circuit_cache_key!(DistinctIncrementalId<C, D>(GlobalNodeId => Stream<C, D>));
 
 pub struct DistinctFactories<Z: IndexedZSet, T: Timestamp> {
     pub input_factories: Z::Factories,
-    trace_factories: <T::OrdValBatch<Z::Key, Z::Val, Z::R> as BatchReader>::Factories,
+    trace_factories: <T::FileValBatch<Z::Key, Z::Val, Z::R> as BatchReader>::Factories,
     aux_factories: OrdIndexedZSetFactories<Z::Key, Z::Val>,
 }
 
@@ -851,7 +851,8 @@ mod test {
     fn do_distinct_inc_test_mt(workers: usize) {
         let hruntime = Runtime::run(workers, || {
             distinct_inc_test();
-        });
+        })
+        .expect("Runtime successful");
 
         hruntime.join().unwrap();
     }

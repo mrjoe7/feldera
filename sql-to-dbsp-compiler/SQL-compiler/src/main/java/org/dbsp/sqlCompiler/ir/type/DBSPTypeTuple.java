@@ -24,7 +24,7 @@
 package org.dbsp.sqlCompiler.ir.type;
 
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -38,9 +38,7 @@ import java.util.List;
 
 import static org.dbsp.sqlCompiler.ir.type.DBSPTypeCode.TUPLE;
 
-/**
- * A Raw Rust tuple.
- */
+/** Our own version of a tuple */
 public class DBSPTypeTuple extends DBSPTypeTupleBase {
     public DBSPTypeTuple(CalciteObject node, boolean mayBeNull, DBSPType... tupFields) {
         super(node, TUPLE, mayBeNull, tupFields);
@@ -56,6 +54,10 @@ public class DBSPTypeTuple extends DBSPTypeTupleBase {
 
     public DBSPTypeTuple(CalciteObject node, List<DBSPType> tupFields) {
         this(node, tupFields.toArray(new DBSPType[0]));
+    }
+
+    public DBSPTypeTuple(CalciteObject node, boolean mayBeNull, List<DBSPType> tupFields) {
+        this(node, mayBeNull, tupFields.toArray(new DBSPType[0]));
     }
 
     public DBSPTypeTuple(List<DBSPType> tupFields) {
@@ -115,10 +117,8 @@ public class DBSPTypeTuple extends DBSPTypeTupleBase {
         visitor.postorder(this);
     }
 
-    /**
-     * Returns a lambda which casts every field of a tuple
-     * to the corresponding field of this type.
-     */
+    /** Returns a lambda which casts every field of a tuple
+     * to the corresponding field of this type. */
     @Override
     public DBSPExpression caster(DBSPType to) {
         if (!to.is(DBSPTypeTuple.class))
@@ -126,7 +126,7 @@ public class DBSPTypeTuple extends DBSPTypeTupleBase {
         DBSPTypeTuple tuple = to.to(DBSPTypeTuple.class);
         if (tuple.size() != this.size())
             return super.caster(to);  // throw
-        DBSPVariablePath var = new DBSPVariablePath("x", this.ref());
+        DBSPVariablePath var = this.ref().var();
         DBSPExpression[] casts = new DBSPExpression[this.tupFields.length];
         for (int i = 0; i < this.tupFields.length; i++) {
             casts[i] = this.tupFields[i].caster(tuple.tupFields[i]);
@@ -143,6 +143,7 @@ public class DBSPTypeTuple extends DBSPTypeTupleBase {
     @Override
     public IIndentStream toString(IIndentStream builder) {
         return builder.append(this.getName())
+                .append(this.mayBeNull ? "?" : "")
                 .append("<")
                 .join(", ", this.tupFields)
                 .append(">");

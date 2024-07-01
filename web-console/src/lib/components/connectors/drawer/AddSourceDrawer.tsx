@@ -1,12 +1,7 @@
 // The drawer component that opens when the user wants to add a connector in the
 // pipeline builder.
 
-import { ConfigEditorDialog } from '$lib/components/connectors/dialogs'
-import { DebeziumInputConnectorDialog } from '$lib/components/connectors/dialogs/DebeziumInputConnector'
-import { KafkaInputConnectorDialog } from '$lib/components/connectors/dialogs/KafkaInputConnector'
-import { KafkaOutputConnectorDialog } from '$lib/components/connectors/dialogs/KafkaOutputConnector'
-import { SnowflakeOutputConnectorDialog } from '$lib/components/connectors/dialogs/SnowflakeOutputConnector'
-import { UrlConnectorDialog } from '$lib/components/connectors/dialogs/UrlConnector'
+import { getConnectorDialogComponent } from '$lib/components/connectors/dialogs/AnyConnector'
 import { useAddConnector } from '$lib/compositions/streaming/builder/useAddIoNode'
 import { useHashPart } from '$lib/compositions/useHashPart'
 import { usePipelineManagerQuery } from '$lib/compositions/usePipelineManagerQuery'
@@ -23,8 +18,6 @@ import { ConnectorType, Direction } from '$lib/types/connectors'
 import { SVGImport } from '$lib/types/imports'
 import Image from 'next/image'
 import { useEffect, useState } from 'react'
-import IconCheck from '~icons/bx/check'
-import IconX from '~icons/bx/x'
 
 import NavigateNextIcon from '@mui/icons-material/NavigateNext'
 import { Breadcrumbs, Button, Card, CardContent, Chip, Grid, Link } from '@mui/material'
@@ -120,7 +113,7 @@ const IoSelectBox = (props: {
   )
 }
 
-const shouldDisplayConnector = (direction: Direction, connectorType: ConnectorType) =>
+const shouldDisplayConnector = (direction: Direction) => (connectorType: ConnectorType) =>
   (d => d === Direction.INPUT_OUTPUT || d === direction)(connectorTypeToDirection(connectorType))
 
 const SideBarAddIo = () => {
@@ -182,14 +175,14 @@ const SideBarAddIo = () => {
                 {drawer.nodeType === 'add_input' ? 'Add Input Source' : 'Add Output Destination'}
               </Link>
               <Typography color='text.primary'>
-                {drawer.connectorType && connectorTypeToTitle(drawer.connectorType)}
+                {drawer.connectorType && connectorTypeToTitle(drawer.connectorType).full}
               </Typography>
             </Breadcrumbs>
           )}
         </Typography>
 
         <IconButton size='small' href='#' sx={{ color: 'text.primary' }}>
-          <IconX fontSize={20} />
+          <i className={`bx bx-x`} style={{ fontSize: 24 }} />
         </IconButton>
       </Header>
       {drawer && !drawer.connectorType && (
@@ -199,21 +192,23 @@ const SideBarAddIo = () => {
             ConnectorType.KAFKA_OUT,
             ConnectorType.DEBEZIUM_IN,
             ConnectorType.SNOWFLAKE_OUT,
-            ConnectorType.URL,
+            ConnectorType.DELTALAKE_IN,
+            ConnectorType.DELTALAKE_OUT,
+            ConnectorType.S3_IN,
+            ConnectorType.URL_IN,
             ConnectorType.UNKNOWN
-          ].map(
-            type =>
-              shouldDisplayConnector(drawer.direction, type) && (
-                <IoSelectBox
-                  key={type}
-                  data-testid={'box-connector-' + type}
-                  icon={connectorTypeToLogo(type)}
-                  howMany={sourceCounts[type] ?? 0}
-                  newButtonProps={{ href: `#new/connector/${drawer.direction}/${type}` }}
-                  selectButtonProps={{ href: `#${drawer!.nodeType}/${type ?? ''}` }}
-                />
-              )
-          )}
+          ]
+            .filter(shouldDisplayConnector(drawer.direction))
+            .map(type => (
+              <IoSelectBox
+                key={type}
+                data-testid={'box-connector-' + type}
+                icon={connectorTypeToLogo(type)}
+                howMany={sourceCounts[type] ?? 0}
+                newButtonProps={{ href: `#new/connector/${drawer.direction}/${type}` }}
+                selectButtonProps={{ href: `#${drawer!.nodeType}/${type ?? ''}` }}
+              />
+            ))}
         </Grid>
       )}
       {!!drawer?.connectorType && (
@@ -228,20 +223,12 @@ const SideBarAddIo = () => {
         </Grid>
       )}
       {(() => {
-        const dialogs = {
-          [ConnectorType.KAFKA_IN]: KafkaInputConnectorDialog,
-          [ConnectorType.KAFKA_OUT]: KafkaOutputConnectorDialog,
-          [ConnectorType.DEBEZIUM_IN]: DebeziumInputConnectorDialog,
-          [ConnectorType.SNOWFLAKE_OUT]: SnowflakeOutputConnectorDialog,
-          [ConnectorType.URL]: UrlConnectorDialog,
-          [ConnectorType.UNKNOWN]: ConfigEditorDialog
-        }
         const res = /new\/connector\/(\w+)\/(\w+)/.exec(hash)
         if (!res) {
           return <></>
         }
         const [, direction, type] = res
-        const Dialog = dialogs[type as keyof typeof dialogs]
+        const Dialog = getConnectorDialogComponent(type as ConnectorType)
         return (
           <Dialog
             {...showOnHash('new/connector/')}
@@ -251,7 +238,7 @@ const SideBarAddIo = () => {
               <Button
                 variant='contained'
                 color='success'
-                endIcon={<IconCheck />}
+                endIcon={<i className={`bx bx-check`} style={{}} />}
                 type='submit'
                 data-testid='button-create'
               >

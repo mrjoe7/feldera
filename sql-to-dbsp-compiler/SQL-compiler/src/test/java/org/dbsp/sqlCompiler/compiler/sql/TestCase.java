@@ -1,7 +1,7 @@
 package org.dbsp.sqlCompiler.compiler.sql;
 
 import org.dbsp.sqlCompiler.compiler.errors.UnimplementedException;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.sql.simple.Change;
 import org.dbsp.sqlCompiler.compiler.sql.simple.InputOutputChange;
 import org.dbsp.sqlCompiler.ir.DBSPFunction;
@@ -20,7 +20,7 @@ import org.dbsp.sqlCompiler.ir.statement.DBSPStatement;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBool;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeFP;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeString;
@@ -33,9 +33,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Represents a test case that will be executed.
- */
+/** Represents a test case that will be executed. */
 class TestCase {
     /** Name of the test case. */
     public final String name;
@@ -58,8 +56,7 @@ class TestCase {
      * Generates a Rust function which tests a DBSP circuit.
      *
      * @return The code for a function that runs the circuit with the specified
-     * input and tests the produced output.
-     */
+     * input and tests the produced output. */
     DBSPFunction createTesterCode(int testNumber,
                                   @SuppressWarnings("SameParameterValue")
                                   String codeDirectory) throws IOException {
@@ -70,7 +67,7 @@ class TestCase {
         DBSPExpression[] circuitArguments = new DBSPExpression[1];
         circuitArguments[0] = new DBSPApplyExpression("CircuitConfig::with_workers", DBSPTypeAny.getDefault(), new DBSPUSizeLiteral(2));
         DBSPLetStatement cas = new DBSPLetStatement("circuitAndStreams",
-                new DBSPApplyExpression(this.ccs.circuit.name, DBSPTypeAny.getDefault(), circuitArguments).unwrap(),
+                new DBSPApplyExpression(this.ccs.circuit.name, DBSPTypeAny.getDefault(), circuitArguments).resultUnwrap(),
                 true);
         list.add(cas);
         DBSPLetStatement streams = new DBSPLetStatement("streams", cas.getVarReference().field(1));
@@ -106,7 +103,7 @@ class TestCase {
             }
             DBSPLetStatement step =
                     new DBSPLetStatement("_", new DBSPApplyMethodExpression(
-                    "step", DBSPTypeAny.getDefault(), cas.getVarReference().field(0)).unwrap());
+                    "step", DBSPTypeAny.getDefault(), cas.getVarReference().field(0)).resultUnwrap());
             list.add(step);
 
             for (int i = 0; i < changes.outputs.getSetCount(); i++) {

@@ -9,34 +9,56 @@
 //! The API also prevents reading from a file that is not completed.
 #![warn(missing_docs)]
 
+use dashmap::DashMap;
+use std::fs::File;
 use std::{
+    fs::OpenOptions,
     path::{Path, PathBuf},
-    rc::Rc,
     sync::{
         atomic::{AtomicI64, Ordering},
-        Arc, Once, OnceLock,
+        Arc, OnceLock,
     },
 };
 
-use log::warn;
+use pipeline_types::config::StorageCacheConfig;
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use tempfile::TempDir;
 use thiserror::Error;
+use tracing::{trace, warn};
 use uuid::Uuid;
 
 use crate::storage::buffer_cache::FBuf;
+
 pub mod metrics;
 
+#[cfg(target_os = "linux")]
 pub mod io_uring_impl;
 pub mod memory_impl;
-pub mod monoio_impl;
 pub mod posixio_impl;
 
 #[cfg(test)]
 pub(crate) mod tests;
 
+/// Extension added to files that are incomplete/being written to.
+///
+/// A file that is created with `create` or `create_named` will add
+/// `.mut` to its filename which is removed when we call `complete()`.
+const MUTABLE_EXTENSION: &str = ".mut";
+
+/// Extension for batch files used by the engine.
+const CREATE_FILE_EXTENSION: &str = ".feldera";
+
 /// A global counter for default backends that are initiated per-core.
 static NEXT_FILE_HANDLE: OnceLock<Arc<AtomicIncrementOnlyI64>> = OnceLock::new();
+
+static IMMUTABLE_FILE_METADATA: OnceLock<Arc<ImmutableFiles>> = OnceLock::new();
+
+/// Helper function that appends to a [`PathBuf`].
+fn append_to_path(p: PathBuf, s: &str) -> PathBuf {
+    let mut p = p.into_os_string();
+    p.push(s);
+    p.into()
+}
 
 /// An Increment Only Atomic.
 ///
@@ -62,6 +84,8 @@ impl AtomicIncrementOnlyI64 {
 }
 
 /// A file-descriptor we can write to.
+
+#[derive(Eq, PartialEq, Debug, Hash)]
 pub struct FileHandle(i64);
 
 impl From<&FileHandle> for i64 {
@@ -71,11 +95,66 @@ impl From<&FileHandle> for i64 {
 }
 
 /// A file-descriptor we can read or prefetch from.
+#[derive(Eq, PartialEq, Debug, Hash)]
 pub struct ImmutableFileHandle(i64);
+
+impl Drop for ImmutableFileHandle {
+    fn drop(&mut self) {
+        if let Some(iftable) = IMMUTABLE_FILE_METADATA.get() {
+            iftable.remove(self.0);
+        }
+    }
+}
 
 impl From<&ImmutableFileHandle> for i64 {
     fn from(fd: &ImmutableFileHandle) -> Self {
         fd.0
+    }
+}
+
+/// This struct stores the open files in a way
+/// so that is globally accessible by all backends.
+pub struct ImmutableFiles {
+    inner: DashMap<i64, Arc<ImmutableFile>>,
+}
+
+impl ImmutableFiles {
+    fn insert(&self, fd: i64, imf: Arc<ImmutableFile>) {
+        let r = self.inner.insert(fd, imf);
+        assert!(r.is_none());
+    }
+
+    fn get(&self, fd: i64) -> Option<Arc<ImmutableFile>> {
+        self.inner.get(&fd).map(|v| v.value().clone())
+    }
+
+    fn remove(&self, fd: i64) {
+        self.inner.remove(&fd);
+    }
+}
+
+impl Default for ImmutableFiles {
+    fn default() -> Self {
+        Self {
+            inner: DashMap::with_capacity(1024),
+        }
+    }
+}
+
+/// We use this to keep track of the files that are currently open
+/// for reading (and may be read by multiple threads).
+pub(crate) struct ImmutableFile {
+    /// The file.
+    file: Arc<File>,
+    /// File name.
+    path: PathBuf,
+    /// File size.
+    size: u64,
+}
+
+impl ImmutableFile {
+    pub(crate) fn new(file: Arc<File>, path: PathBuf, size: u64) -> Arc<Self> {
+        Arc::new(Self { file, path, size })
     }
 }
 
@@ -89,6 +168,43 @@ pub enum StorageError {
     /// Range to be written overlaps with previous write.
     #[error("The range to be written overlaps with a previous write")]
     OverlappingWrites,
+
+    /// Read ended before the full request length.
+    #[error("The read would have returned less data than requested.")]
+    ShortRead,
+
+    /// Storage location not found.
+    #[error("The requested (base) directory for storage does not exist.")]
+    StorageLocationNotFound,
+
+    /// A process already locked the provided storage directory.
+    ///
+    /// If this is not expected, please remove the lock file manually, after verifying
+    /// that the process with the given PID no longer exists.
+    #[error("A process with PID {0} is already using the storage directory {1:?}.")]
+    StorageLocked(u32, PathBuf),
+
+    /// Unable to lock the PID file for the storage directory.
+    ///
+    /// This means another pipeline started and tried to lock it at the same time.
+    #[error("Unable to lock the PID file ({1:?}) for the storage directory.")]
+    UnableToLockPidFile(i32, PathBuf),
+
+    /// Unknown checkpoint specified in configuration.
+    #[error("Couldn't find the specified checkpoint ({0:?}).")]
+    CheckpointNotFound(Uuid),
+
+    /// Unable to receive a message from the thread that does storage compaction.
+    #[error("Unable to receive a message from the merge-thread.")]
+    TryRx(#[from] std::sync::mpsc::TryRecvError),
+
+    /// Error when sending a message to the thread that merges batches.
+    #[error("Unable to receive a message from the compactor-thread.")]
+    Rx(#[from] std::sync::mpsc::RecvError),
+
+    /// The thread that merges batches exited unexpectedly.
+    #[error("Compactor Thread exited unexpectedly.")]
+    MergerThreadExited,
 }
 
 impl Serialize for StorageError {
@@ -108,11 +224,11 @@ impl Serialize for StorageError {
     }
 }
 
-#[cfg(test)]
 /// Implementation of PartialEq for StorageError.
 ///
 /// This is for testing only and therefore intentionally not a complete
 /// implementation.
+#[cfg(test)]
 impl PartialEq for StorageError {
     fn eq(&self, other: &Self) -> bool {
         fn is_unexpected_eof(error: &StorageError) -> bool {
@@ -122,6 +238,11 @@ impl PartialEq for StorageError {
         #[allow(clippy::match_like_matches_macro)]
         match (self, other) {
             (Self::OverlappingWrites, Self::OverlappingWrites) => true,
+            (Self::ShortRead, Self::ShortRead) => true,
+            (Self::StorageLocationNotFound, Self::StorageLocationNotFound) => true,
+            (Self::StorageLocked(pid, path), Self::StorageLocked(other_pid, other_path)) => {
+                pid == other_pid && path == other_path
+            }
             _ => is_unexpected_eof(self) && is_unexpected_eof(other),
         }
     }
@@ -142,10 +263,24 @@ pub trait Storage {
     /// called and the [`FileHandle`] is converted to an
     /// [`ImmutableFileHandle`].
     fn create(&self) -> Result<FileHandle, StorageError> {
-        let uuid = Uuid::now_v7();
-        let name = uuid.to_string() + ".feldera";
-        self.create_named(Path::new(&name))
+        self.create_with_prefix("")
     }
+
+    /// Creates a new persistent file used for writing data, giving the file's
+    /// name the specified `prefix`. See also [`create`](Self::create).
+    fn create_with_prefix(&self, prefix: &str) -> Result<FileHandle, StorageError> {
+        let uuid = Uuid::now_v7();
+        let name = format!("{}{}{}", prefix, uuid, CREATE_FILE_EXTENSION);
+        let name_path = Path::new(&name);
+        self.create_named(name_path)
+    }
+
+    /// Opens a file for reading.
+    ///
+    /// # Arguments
+    /// - `name` is the name of the file to open. It is relative to the base of
+    ///   the storage backend.
+    fn open(&self, name: &Path) -> Result<ImmutableFileHandle, StorageError>;
 
     /// Deletes a previously completed file.
     ///
@@ -161,6 +296,19 @@ pub trait Storage {
     /// Use [`delete`](Self::delete) for deleting a file that has been
     /// completed.
     fn delete_mut(&self, fd: FileHandle) -> Result<(), StorageError>;
+
+    /// Evicts in-memory, cached contents for a file.
+    ///
+    /// This is useful if we're sure that a file is not going to be read again
+    /// during this run of the program, and we want to free up memory.
+    ///
+    /// This is a no-op for storage backends that do not cache data.
+    fn evict(&self, _fd: ImmutableFileHandle) -> Result<(), StorageError> {
+        Ok(())
+    }
+
+    /// Returns the root of the storage backend.
+    fn base(&self) -> PathBuf;
 
     /// Allocates a buffer suitable for writing to a file using Direct I/O over
     /// `io_uring`.
@@ -188,7 +336,7 @@ pub trait Storage {
         fd: &FileHandle,
         offset: u64,
         data: FBuf,
-    ) -> Result<Rc<FBuf>, StorageError>;
+    ) -> Result<Arc<FBuf>, StorageError>;
 
     /// Completes writing of a file.
     ///
@@ -248,7 +396,7 @@ pub trait Storage {
         fd: &ImmutableFileHandle,
         offset: u64,
         size: usize,
-    ) -> Result<Rc<FBuf>, StorageError>;
+    ) -> Result<Arc<FBuf>, StorageError>;
 
     /// Returns the file's size in bytes.
     fn get_size(&self, fd: &ImmutableFileHandle) -> Result<u64, StorageError>;
@@ -262,6 +410,10 @@ where
         (**self).create_named(name)
     }
 
+    fn open(&self, name: &Path) -> Result<ImmutableFileHandle, StorageError> {
+        (**self).open(name)
+    }
+
     fn delete(&self, fd: ImmutableFileHandle) -> Result<(), StorageError> {
         (**self).delete(fd)
     }
@@ -270,12 +422,16 @@ where
         (**self).delete_mut(fd)
     }
 
+    fn base(&self) -> PathBuf {
+        (**self).base()
+    }
+
     fn write_block(
         &self,
         fd: &FileHandle,
         offset: u64,
         data: FBuf,
-    ) -> Result<Rc<FBuf>, StorageError> {
+    ) -> Result<Arc<FBuf>, StorageError> {
         (**self).write_block(fd, offset, data)
     }
 
@@ -292,7 +448,7 @@ where
         fd: &ImmutableFileHandle,
         offset: u64,
         size: usize,
-    ) -> Result<Rc<FBuf>, StorageError> {
+    ) -> Result<Arc<FBuf>, StorageError> {
         (**self).read_block(fd, offset, size)
     }
 
@@ -313,24 +469,48 @@ pub fn tempdir_for_thread() -> PathBuf {
 }
 
 /// Create and returns a backend of the default kind.
-pub fn new_default_backend(tempdir: PathBuf) -> Backend {
-    match io_uring_impl::IoUringBackend::with_base(&tempdir) {
-        Ok(backend) => Box::new(backend),
+pub fn new_default_backend(tempdir: PathBuf, cache: StorageCacheConfig) -> Backend {
+    trace!("new_default_backend: dir={:?}", tempdir);
+
+    #[cfg(target_os = "linux")]
+    {
+        use nix::sys::statfs::{statfs, TMPFS_MAGIC};
+        if let Ok(s) = statfs(&tempdir) {
+            if s.filesystem_type() == TMPFS_MAGIC {
+                static ONCE: std::sync::Once = std::sync::Once::new();
+                ONCE.call_once(|| {
+                    warn!("initializing storage on in-memory tmpfs filesystem at {}; consider configuring physical storage",
+                          tempdir.to_string_lossy())
+                });
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    match io_uring_impl::IoUringBackend::with_base(&tempdir, cache) {
+        Ok(backend) => return Box::new(backend),
         Err(error) => {
-            static ONCE: Once = Once::new();
+            static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| {
                 warn!("could not initialize io_uring backend ({error}), falling back to POSIX I/O")
             });
-            Box::new(posixio_impl::PosixBackend::with_base(&tempdir))
         }
     }
+
+    Box::new(posixio_impl::PosixBackend::with_base(tempdir, cache))
 }
 
-/// Returns a thread-local default backend.
-pub fn default_backend_for_thread() -> Rc<Backend> {
-    thread_local! {
-        pub static DEFAULT_BACKEND: Rc<Backend>
-            = Rc::new(new_default_backend(tempdir_for_thread()));
+trait StorageCacheFlags {
+    fn cache_flags(&mut self, cache: &StorageCacheConfig) -> &mut Self;
+}
+
+impl StorageCacheFlags for OpenOptions {
+    fn cache_flags(&mut self, cache: &StorageCacheConfig) -> &mut Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            self.custom_flags(cache.to_custom_open_flags());
+        }
+        self
     }
-    DEFAULT_BACKEND.with(|rc| rc.clone())
 }

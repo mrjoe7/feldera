@@ -1,8 +1,15 @@
 import { assertUnion } from '$lib/functions/common/array'
 import { compose } from '$lib/functions/common/function'
-import { getQueryData, invalidateQuery, mkQuery, mkQueryKey, setQueryData } from '$lib/functions/common/tanstack'
-import { JSONXgressValue } from '$lib/functions/ddl'
+import {
+  getQueryData,
+  invalidateQuery,
+  mkQuery,
+  mkQueryKey,
+  setQueriesData,
+  setQueryData
+} from '$lib/functions/common/tanstack'
 import { getCaseIndependentName } from '$lib/functions/felderaRelation'
+import { JSONXgressValue } from '$lib/functions/sqlValue'
 import {
   ApiError,
   ApiKeyDescr,
@@ -34,7 +41,8 @@ import {
   UpdateProgramRequest,
   UpdateProgramResponse,
   UpdateServiceRequest,
-  UpdateServiceResponse
+  UpdateServiceResponse,
+  Pipeline as RawPipeline
 } from '$lib/services/manager'
 import { Arguments } from '$lib/types/common/function'
 import { ControllerStatus, Pipeline, PipelineStatus } from '$lib/types/pipeline'
@@ -56,6 +64,11 @@ const toClientPipelineStatus = (status: RawPipelineStatus) => {
     .with(RawPipelineStatus.FAILED, () => PipelineStatus.FAILED)
     .exhaustive()
 }
+
+const toClientPipeline = (p: RawPipeline) => ({
+  ...p,
+  state: { ...p.state, current_status: toClientPipelineStatus(p.state.current_status) }
+})
 
 /**
  * Consolidate local STARTING | PAUSING | SHUTTING_DOWN status with remote PROVISIONING status
@@ -115,19 +128,16 @@ const PipelineManagerApi = {
   programs: () => ProgramsService.getPrograms(),
   programCode: (programName: string) => ProgramsService.getProgram(programName, true),
   programStatus: (programName: string) => ProgramsService.getProgram(programName, false),
-  pipelines: () =>
-    PipelinesService.listPipelines().then(ps =>
-      ps.map(p => ({
-        ...p,
-        state: { ...p.state, current_status: toClientPipelineStatus(p.state.current_status) }
-      }))
-    ),
+  pipelines: () => PipelinesService.listPipelines().then(ps => ps.map(toClientPipeline)),
   pipelineStatus: compose(PipelinesService.getPipeline, p =>
     p.then(p => ({ ...p, state: { ...p.state, current_status: toClientPipelineStatus(p.state.current_status) } }))
   ),
   pipelineConfig: PipelinesService.getPipelineConfig,
   pipelineStats: (pipelineName: string) =>
-    PipelinesService.pipelineStats(pipelineName) as unknown as CancelablePromise<ControllerStatus>,
+    PipelinesService.pipelineStats(pipelineName).then(status => ({
+      pipelineName,
+      status: status as ControllerStatus | null
+    })),
   pipelineLastRevision: PipelinesService.pipelineDeployed,
   pipelineValidate: PipelinesService.pipelineValidate,
   connectors: () => ConnectorsService.listConnectors(),
@@ -139,12 +149,11 @@ const PipelineManagerApi = {
   getDemos: () =>
     ConfigurationService.getDemos().then(demos =>
       Promise.all(
-        demos.map(async url => {
-          const demoBody = await fetch(url).then(r => r.json())
+        demos.map(async body => {
           return {
-            url,
-            title: demoBody.title,
-            description: demoBody.description
+            body,
+            title: body.title,
+            description: body.description
           }
         })
       )
@@ -299,8 +308,12 @@ export const mutationShutdownPipeline = (queryClient: QueryClient) =>
     onSettled: (_data, _error, pipelineName) => {
       invalidatePipeline(queryClient, pipelineName)
     },
-    onSuccess: (_data, variables, _context) => {
-      setQueryData(queryClient, PipelineManagerQueryKey.pipelineStats(variables), null)
+    onSuccess: (_data, pipelineName, _context) => {
+      setQueryData(queryClient, PipelineManagerQueryKey.pipelineStats(pipelineName), {
+        pipelineName,
+        status: null
+      })
+      setQueriesData(queryClient, { queryKey: ['pipelineMetrics', pipelineName] }, { pipelineName, status: null })
     },
     onError: (_error, pipelineName) => {
       pipelineStatusQueryCacheUpdate(queryClient, pipelineName, 'current_status', PipelineStatus.PAUSED)
@@ -604,6 +617,7 @@ export const pipelineQueryCacheUpdate = (
       }
     } satisfies Pipeline
   }
+
   setQueryData(queryClient, PipelineManagerQueryKey.pipelineStatus(pipelineName), updateCache)
 
   setQueryData(queryClient, PipelineManagerQueryKey.pipelines(), oldDatas =>

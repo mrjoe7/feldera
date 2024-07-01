@@ -12,6 +12,7 @@ import { invalidateQuery } from '$lib/functions/common/tanstack'
 import { PLACEHOLDER_VALUES } from '$lib/functions/placeholders'
 import {
   ApiError,
+  CompilationProfile,
   NewProgramRequest,
   NewProgramResponse,
   ProgramDescr,
@@ -162,7 +163,12 @@ const useCreateProgramEffect = (
     if (!program.name || program.program_id) {
       return
     }
-    return createProgram({ ...program, code: program.code ?? '' })
+    return createProgram({
+      name: program.name,
+      description: program.description ?? '',
+      config: undefined,
+      code: program.code ?? ''
+    })
   }, SAVE_DELAY)
   useEffect(() => createProgramDebounced(), [program, createProgramDebounced])
 }
@@ -250,9 +256,11 @@ export const ProgramEditorImpl = ({
   // TODO: The IStandaloneCodeEditor type is not exposed in the react monaco
   // editor package?
   const editorRef = useRef<any /* IStandaloneCodeEditor */>(null)
+
   function handleEditorDidMount(editor: any) {
     editorRef.current = editor
   }
+
   const updateCode = (value: string | undefined) => {
     updateProgram(p => ({ ...p, code: value }))
   }
@@ -308,6 +316,7 @@ export const ProgramEditor = ({ programName }: { programName: string }) => {
       description: '',
       program_id: '',
       status: 'Pending',
+      config: { profile: CompilationProfile.OPTIMIZED },
       version: 0
     },
     refetchOnWindowFocus: false

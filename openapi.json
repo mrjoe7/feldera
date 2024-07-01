@@ -6,7 +6,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.12.0"
+    "version": "0.19.0"
   },
   "paths": {
     "/config/authentication": {
@@ -15,7 +15,6 @@
           "Authentication"
         ],
         "summary": "Get authentication provider configuration",
-        "description": "Get authentication provider configuration",
         "operationId": "get_authentication_config",
         "responses": {
           "200": {
@@ -47,7 +46,6 @@
           "API keys"
         ],
         "summary": "List all API keys",
-        "description": "List all API keys",
         "operationId": "list_api_keys",
         "parameters": [
           {
@@ -108,7 +106,6 @@
           "API keys"
         ],
         "summary": "Create an API key",
-        "description": "Create an API key",
         "operationId": "create_api_key",
         "requestBody": {
           "description": "",
@@ -161,7 +158,6 @@
           "API keys"
         ],
         "summary": "Get an API key description",
-        "description": "Get an API key description",
         "operationId": "get_api_key",
         "parameters": [
           {
@@ -218,7 +214,6 @@
           "API keys"
         ],
         "summary": "Delete an API key",
-        "description": "Delete an API key",
         "operationId": "delete_api_key",
         "parameters": [
           {
@@ -269,19 +264,28 @@
         "tags": [
           "Configuration"
         ],
-        "summary": "Get the list of demo URLs.",
-        "description": "Get the list of demo URLs.",
+        "summary": "Get the list of demos.",
         "operationId": "get_demos",
         "responses": {
           "200": {
-            "description": "URLs to JSON objects that describe a set of demos",
+            "description": "List of demos.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "string"
+                    "$ref": "#/components/schemas/Demo"
                   }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to read demos from the demos directory.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -300,7 +304,6 @@
           "Connectors"
         ],
         "summary": "Fetch connectors, optionally filtered by name or ID",
-        "description": "Fetch connectors, optionally filtered by name or ID",
         "operationId": "list_connectors",
         "parameters": [
           {
@@ -381,7 +384,6 @@
           "Connectors"
         ],
         "summary": "Create a new connector.",
-        "description": "Create a new connector.",
         "operationId": "new_connector",
         "requestBody": {
           "content": {
@@ -433,7 +435,6 @@
           "Connectors"
         ],
         "summary": "Fetch a connector by name.",
-        "description": "Fetch a connector by name.",
         "operationId": "get_connector",
         "parameters": [
           {
@@ -486,7 +487,6 @@
           "Connectors"
         ],
         "summary": "Create or replace a connector.",
-        "description": "Create or replace a connector.",
         "operationId": "create_or_replace_connector",
         "parameters": [
           {
@@ -557,7 +557,6 @@
           "Connectors"
         ],
         "summary": "Delete an existing connector.",
-        "description": "Delete an existing connector.",
         "operationId": "delete_connector",
         "parameters": [
           {
@@ -603,7 +602,6 @@
           "Connectors"
         ],
         "summary": "Update the name, description and/or configuration of a connector.",
-        "description": "Update the name, description and/or configuration of a connector.",
         "operationId": "update_connector",
         "parameters": [
           {
@@ -668,7 +666,6 @@
           "Pipelines"
         ],
         "summary": "Fetch pipelines, optionally filtered by name or ID.",
-        "description": "Fetch pipelines, optionally filtered by name or ID.",
         "operationId": "list_pipelines",
         "parameters": [
           {
@@ -719,7 +716,6 @@
           "Pipelines"
         ],
         "summary": "Create a new pipeline.",
-        "description": "Create a new pipeline.",
         "operationId": "new_pipeline",
         "requestBody": {
           "content": {
@@ -788,7 +784,6 @@
           "Pipelines"
         ],
         "summary": "Fetch a pipeline by ID.",
-        "description": "Fetch a pipeline by ID.",
         "operationId": "get_pipeline",
         "parameters": [
           {
@@ -813,18 +808,23 @@
                   "cpu_profiler": false,
                   "inputs": {
                     "Input-To-Table": {
+                      "enable_output_buffer": false,
                       "format": {
                         "config": null,
                         "name": "csv"
                       },
-                      "max_buffered_records": 1000000,
+                      "max_output_buffer_size_records": 18446744073709551615,
+                      "max_output_buffer_time_millis": 18446744073709551615,
+                      "max_queued_records": 1000000,
                       "stream": "my_input_table",
                       "transport": {
                         "config": {
                           "auto.offset.reset": "earliest",
+                          "bootstrap.servers": "localhost:9092",
                           "fault_tolerance": null,
                           "group.instance.id": "group0",
                           "group_join_timeout_secs": 10,
+                          "kafka_service": null,
                           "log_level": null,
                           "topics": [
                             "test_input1"
@@ -836,22 +836,25 @@
                   },
                   "max_buffering_delay_usecs": 0,
                   "min_batch_size_records": 0,
+                  "min_storage_rows": null,
                   "name": "pipeline-67e55044-10b1-426f-9247-bb680e5fe0c8",
                   "outputs": {
                     "Output-To-View": {
-                      "enable_buffer": false,
+                      "enable_output_buffer": false,
                       "format": {
                         "config": null,
                         "name": "csv"
                       },
-                      "max_buffer_size_records": 0,
-                      "max_buffer_time_millis": 0,
-                      "max_buffered_records": 1000000,
+                      "max_output_buffer_size_records": 18446744073709551615,
+                      "max_output_buffer_time_millis": 18446744073709551615,
+                      "max_queued_records": 1000000,
                       "stream": "my_output_view",
                       "transport": {
                         "config": {
                           "fault_tolerance": null,
+                          "headers": [],
                           "initialization_timeout_secs": 60,
+                          "kafka_service": null,
                           "log_level": null,
                           "max_inflight_messages": 1000,
                           "topic": "test_output1"
@@ -865,9 +868,12 @@
                     "cpu_cores_min": null,
                     "memory_mb_max": null,
                     "memory_mb_min": null,
+                    "storage_class": null,
                     "storage_mb_max": null
                   },
-                  "storage_location": null,
+                  "storage": false,
+                  "storage_config": null,
+                  "tcp_metrics_exporter": false,
                   "workers": 8
                 }
               }
@@ -902,7 +908,6 @@
           "Pipelines"
         ],
         "summary": "Create or replace a pipeline.",
-        "description": "Create or replace a pipeline.",
         "operationId": "create_or_replace_pipeline",
         "parameters": [
           {
@@ -973,7 +978,6 @@
           "Pipelines"
         ],
         "summary": "Delete a pipeline. The pipeline must be in the shutdown state.",
-        "description": "Delete a pipeline. The pipeline must be in the shutdown state.",
         "operationId": "pipeline_delete",
         "parameters": [
           {
@@ -1055,7 +1059,7 @@
           "Pipelines"
         ],
         "summary": "Change a pipeline's name, description, code, configuration, or connectors.",
-        "description": "Change a pipeline's name, description, code, configuration, or connectors.\nOn success, increments the pipeline's version by 1.",
+        "description": "On success, increments the pipeline's version by 1.",
         "operationId": "update_pipeline",
         "parameters": [
           {
@@ -1133,7 +1137,7 @@
           "Pipelines"
         ],
         "summary": "Fetch a pipeline's configuration.",
-        "description": "Fetch a pipeline's configuration.\n\nWhen defining a pipeline, clients have to provide an optional\n`RuntimeConfig` for the pipelines and references to existing\nconnectors to attach to the pipeline. This endpoint retrieves\nthe *expanded* definition of the pipeline's configuration,\nwhich comprises both the `RuntimeConfig` and the complete\ndefinitions of the attached connectors.",
+        "description": "When defining a pipeline, clients have to provide an optional\n`RuntimeConfig` for the pipelines and references to existing\nconnectors to attach to the pipeline. This endpoint retrieves\nthe *expanded* definition of the pipeline's configuration,\nwhich comprises both the `RuntimeConfig` and the complete\ndefinitions of the attached connectors.",
         "operationId": "get_pipeline_config",
         "parameters": [
           {
@@ -1188,7 +1192,6 @@
           "Pipelines"
         ],
         "summary": "Return the currently deployed version of the pipeline, if any.",
-        "description": "Return the currently deployed version of the pipeline, if any.",
         "operationId": "pipeline_deployed",
         "parameters": [
           {
@@ -1242,13 +1245,85 @@
         ]
       }
     },
+    "/v0/pipelines/{pipeline_name}/dump_profile": {
+      "get": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Initiate profile dump.",
+        "operationId": "dump_profile",
+        "parameters": [
+          {
+            "name": "pipeline_name",
+            "in": "path",
+            "description": "Unique pipeline name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile dump initiated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Specified pipeline id is not a valid uuid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "details": {
+                    "error": "invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1",
+                    "value": "not_a_uuid"
+                  },
+                  "error_code": "InvalidUuidParam",
+                  "message": "Invalid UUID string 'not_a_uuid': 'invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1'"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Specified pipeline id does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "details": {
+                    "pipeline_id": "2e79afe1-ff4d-44d3-af5f-9397de7746c0"
+                  },
+                  "error_code": "UnknownPipeline",
+                  "message": "Unknown pipeline id '2e79afe1-ff4d-44d3-af5f-9397de7746c0'"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JSON web token (JWT) or API key": []
+          }
+        ]
+      }
+    },
     "/v0/pipelines/{pipeline_name}/egress/{table_name}": {
       "post": {
         "tags": [
           "HTTP input/output"
         ],
         "summary": "Subscribe to a stream of updates from a SQL view or table.",
-        "description": "Subscribe to a stream of updates from a SQL view or table.\n\nThe pipeline responds with a continuous stream of changes to the specified\ntable or view, encoded using the format specified in the `?format=`\nparameter. Updates are split into `Chunk`s.\n\nThe pipeline continues sending updates until the client closes the\nconnection or the pipeline is shut down.\n\nThis API is a POST instead of a GET, because when performing neighborhood\nqueries (query='neighborhood'), the call expects a request body which\ncontains, among other things, a full row to execute a neighborhood search\naround. A row can be quite large and is not appropriate as a query\nparameter.",
+        "description": "The pipeline responds with a continuous stream of changes to the specified\ntable or view, encoded using the format specified in the `?format=`\nparameter. Updates are split into `Chunk`s.\n\nThe pipeline continues sending updates until the client closes the\nconnection or the pipeline is shut down.\n\nThis API is a POST instead of a GET, because when performing neighborhood\nqueries (query='neighborhood'), the call expects a request body which\ncontains, among other things, a full row to execute a neighborhood search\naround. A row can be quite large and is not appropriate as a query\nparameter.",
         "operationId": "http_output",
         "parameters": [
           {
@@ -1322,6 +1397,16 @@
             "name": "array",
             "in": "query",
             "description": "Set to `true` to group updates in this stream into JSON arrays (used in conjunction with `format=json`). The default value is `false`",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "nullable": true
+            }
+          },
+          {
+            "name": "backpressure",
+            "in": "query",
+            "description": "Apply backpressure on the pipeline when the HTTP client cannot receive data fast enough.\n        When this flag is set to false (the default), the HTTP connector drops data chunks if the client is not keeping up with its output.  This prevents a slow HTTP client from slowing down the entire pipeline.\n        When the flag is set to true, the connector waits for the client to receive each chunk and blocks the pipeline if the client cannot keep up.",
             "required": false,
             "schema": {
               "type": "boolean",
@@ -1411,13 +1496,86 @@
         ]
       }
     },
+    "/v0/pipelines/{pipeline_name}/heap_profile": {
+      "get": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Retrieve heap profile of the pipeline.",
+        "operationId": "heap_profile",
+        "parameters": [
+          {
+            "name": "pipeline_name",
+            "in": "path",
+            "description": "Unique pipeline name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pipeline's heap usage profile as a gzipped protobuf that can be inspected by the pprof tool.",
+            "content": {
+              "application/protobuf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Specified pipeline id is not a valid uuid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "details": {
+                    "error": "invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1",
+                    "value": "not_a_uuid"
+                  },
+                  "error_code": "InvalidUuidParam",
+                  "message": "Invalid UUID string 'not_a_uuid': 'invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1'"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Specified pipeline id does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "details": {
+                    "pipeline_id": "2e79afe1-ff4d-44d3-af5f-9397de7746c0"
+                  },
+                  "error_code": "UnknownPipeline",
+                  "message": "Unknown pipeline id '2e79afe1-ff4d-44d3-af5f-9397de7746c0'"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JSON web token (JWT) or API key": []
+          }
+        ]
+      }
+    },
     "/v0/pipelines/{pipeline_name}/ingress/{table_name}": {
       "post": {
         "tags": [
           "HTTP input/output"
         ],
         "summary": "Push data to a SQL table.",
-        "description": "Push data to a SQL table.\n\nThe client sends data encoded using the format specified in the `?format=`\nparameter as a body of the request.  The contents of the data must match\nthe SQL table schema specified in `table_name`\n\nThe pipeline ingests data as it arrives without waiting for the end of\nthe request.  Successful HTTP response indicates that all data has been\ningested successfully.",
+        "description": "The client sends data encoded using the format specified in the `?format=`\nparameter as a body of the request.  The contents of the data must match\nthe SQL table schema specified in `table_name`\n\nThe pipeline ingests data as it arrives without waiting for the end of\nthe request.  Successful HTTP response indicates that all data has been\ningested successfully.",
         "operationId": "http_input",
         "parameters": [
           {
@@ -1547,7 +1705,6 @@
           "Pipelines"
         ],
         "summary": "Retrieve pipeline metrics and performance counters.",
-        "description": "Retrieve pipeline metrics and performance counters.",
         "operationId": "pipeline_stats",
         "parameters": [
           {
@@ -1620,7 +1777,7 @@
           "Pipelines"
         ],
         "summary": "Validate a pipeline.",
-        "description": "Validate a pipeline.\n\nChecks whether a pipeline is configured correctly. This includes\nchecking whether the pipeline references a valid compiled program,\nwhether the connectors reference valid tables/views in the program,\nand more.",
+        "description": "Checks whether a pipeline is configured correctly. This includes\nchecking whether the pipeline references a valid compiled program,\nwhether the connectors reference valid tables/views in the program,\nand more.",
         "operationId": "pipeline_validate",
         "parameters": [
           {
@@ -1752,7 +1909,7 @@
           "Pipelines"
         ],
         "summary": "Change the desired state of the pipeline.",
-        "description": "Change the desired state of the pipeline.\n\nThis endpoint allows the user to control the execution of the pipeline,\nby changing its desired state attribute (see the discussion of the desired\nstate model in the [`PipelineStatus`] documentation).\n\nThe endpoint returns immediately after validating the request and forwarding\nit to the pipeline. The requested status change completes asynchronously.\nOn success, the pipeline enters the requested desired state.  On error, the\npipeline transitions to the `Failed` state. The user\ncan monitor the current status of the pipeline by polling the `GET\n/pipeline` endpoint.\n\nThe following values of the `action` argument are accepted by this endpoint:\n\n- 'start': Start processing data.\n- 'pause': Pause the pipeline.\n- 'shutdown': Terminate the execution of the pipeline.",
+        "description": "This endpoint allows the user to control the execution of the pipeline,\nby changing its desired state attribute (see the discussion of the desired\nstate model in the [`PipelineStatus`] documentation).\n\nThe endpoint returns immediately after validating the request and forwarding\nit to the pipeline. The requested status change completes asynchronously.\nOn success, the pipeline enters the requested desired state.  On error, the\npipeline transitions to the `Failed` state. The user\ncan monitor the current status of the pipeline by polling the `GET\n/pipeline` endpoint.\n\nThe following values of the `action` argument are accepted by this endpoint:\n\n- 'start': Start processing data.\n- 'pause': Pause the pipeline.\n- 'shutdown': Terminate the execution of the pipeline.",
         "operationId": "pipeline_action",
         "parameters": [
           {
@@ -1946,7 +2103,6 @@
           "Programs"
         ],
         "summary": "Fetch programs, optionally filtered by name or ID.",
-        "description": "Fetch programs, optionally filtered by name or ID.",
         "operationId": "get_programs",
         "parameters": [
           {
@@ -2037,7 +2193,6 @@
           "Programs"
         ],
         "summary": "Create a new program.",
-        "description": "Create a new program.",
         "operationId": "new_program",
         "requestBody": {
           "content": {
@@ -2089,7 +2244,6 @@
           "Programs"
         ],
         "summary": "Fetch a program by name.",
-        "description": "Fetch a program by name.",
         "operationId": "get_program",
         "parameters": [
           {
@@ -2152,7 +2306,6 @@
           "Programs"
         ],
         "summary": "Create or replace a program.",
-        "description": "Create or replace a program.",
         "operationId": "create_or_replace_program",
         "parameters": [
           {
@@ -2223,7 +2376,7 @@
           "Programs"
         ],
         "summary": "Delete a program.",
-        "description": "Delete a program.\n\nDeletion fails if there is at least one pipeline associated with the\nprogram.",
+        "description": "Deletion fails if there is at least one pipeline associated with the\nprogram.",
         "operationId": "delete_program",
         "parameters": [
           {
@@ -2286,7 +2439,7 @@
           "Programs"
         ],
         "summary": "Change one or more of a program's code, description or name.",
-        "description": "Change one or more of a program's code, description or name.\n\nIf a program's code changes, any ongoing compilation gets cancelled,\nthe program status is reset to `None`, and the program version\nis incremented by 1.\n\nChanging only the program's name or description does not affect its\nversion or the compilation process.",
+        "description": "If a program's code changes, any ongoing compilation gets cancelled,\nthe program status is reset to `None`, and the program version\nis incremented by 1.\n\nChanging only the program's name or description does not affect its\nversion or the compilation process.",
         "operationId": "update_program",
         "parameters": [
           {
@@ -2366,7 +2519,7 @@
           "Programs"
         ],
         "summary": "Deprecated. Mark a program for compilation.",
-        "description": "Deprecated. Mark a program for compilation.\n\nThe client can track a program's compilation status by polling the\n`/program/{program_name}` or `/programs` endpoints, and\nthen checking the `status` field of the program object.",
+        "description": "The client can track a program's compilation status by polling the\n`/program/{program_name}` or `/programs` endpoints, and\nthen checking the `status` field of the program object.",
         "operationId": "compile_program",
         "parameters": [
           {
@@ -2441,7 +2594,6 @@
           "Services"
         ],
         "summary": "Fetch services, optionally filtered by name, ID or configuration type.",
-        "description": "Fetch services, optionally filtered by name, ID or configuration type.",
         "operationId": "list_services",
         "parameters": [
           {
@@ -2532,7 +2684,6 @@
           "Services"
         ],
         "summary": "Create a new service.",
-        "description": "Create a new service.",
         "operationId": "new_service",
         "requestBody": {
           "content": {
@@ -2584,7 +2735,6 @@
           "Services"
         ],
         "summary": "Fetch a service by name.",
-        "description": "Fetch a service by name.",
         "operationId": "get_service",
         "parameters": [
           {
@@ -2637,7 +2787,6 @@
           "Services"
         ],
         "summary": "Delete an existing service.",
-        "description": "Delete an existing service.",
         "operationId": "delete_service",
         "parameters": [
           {
@@ -2683,7 +2832,6 @@
           "Services"
         ],
         "summary": "Update the name, description and/or configuration of a service.",
-        "description": "Update the name, description and/or configuration of a service.",
         "operationId": "update_service",
         "parameters": [
           {
@@ -2748,7 +2896,6 @@
           "Services"
         ],
         "summary": "Fetch a list of probes for a service, optionally filtered by id.",
-        "description": "Fetch a list of probes for a service, optionally filtered by id.",
         "operationId": "list_service_probes",
         "parameters": [
           {
@@ -2841,7 +2988,6 @@
           "Services"
         ],
         "summary": "Create a service probe.",
-        "description": "Create a service probe.",
         "operationId": "new_service_probe",
         "parameters": [
           {
@@ -3077,11 +3223,26 @@
         "type": "object",
         "description": "A SQL column type description.\n\nMatches the Calcite JSON format.",
         "required": [
-          "type",
           "nullable"
         ],
         "properties": {
           "component": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ColumnType"
+              }
+            ],
+            "nullable": true
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Field"
+            },
+            "description": "The fields of the type (if available).\n\nFor example this would specify the fields of a `CREATE TYPE` construct.\n\n```sql\nCREATE TYPE person_typ AS (\nfirstname       VARCHAR(30),\nlastname        VARCHAR(30),\naddress         ADDRESS_TYP\n);\n```\n\nWould lead to the following `fields` value:\n\n```sql\n[\nColumnType { name: \"firstname, ... },\nColumnType { name: \"lastname\", ... },\nColumnType { name: \"address\", fields: [ ... ] }\n]\n```",
+            "nullable": true
+          },
+          "key": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/ColumnType"
@@ -3107,8 +3268,25 @@
           },
           "type": {
             "$ref": "#/components/schemas/SqlType"
+          },
+          "value": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ColumnType"
+              }
+            ],
+            "nullable": true
           }
         }
+      },
+      "CompilationProfile": {
+        "type": "string",
+        "description": "Enumeration of possible compilation profiles that can be passed to the Rust compiler\nas an argument via `cargo build --profile <>`. A compilation profile affects among\nother things the compilation speed (how long till the program is ready to be run)\nand runtime speed (the performance while running).",
+        "enum": [
+          "dev",
+          "unoptimized",
+          "optimized"
+        ]
       },
       "CompileProgramRequest": {
         "type": "object",
@@ -3123,26 +3301,37 @@
         }
       },
       "ConnectorConfig": {
-        "type": "object",
-        "description": "A data connector's configuration",
-        "required": [
-          "transport",
-          "format"
-        ],
-        "properties": {
-          "format": {
-            "$ref": "#/components/schemas/FormatConfig"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OutputBufferConfig"
           },
-          "max_buffered_records": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Backpressure threshold.\n\nMaximal amount of records buffered by the endpoint before the endpoint\nis paused by the backpressure mechanism.  Note that this is not a\nhard bound: there can be a small delay between the backpressure\nmechanism is triggered and the endpoint is paused, during which more\ndata may be received.\n\nThe default is 1 million.",
-            "minimum": 0
-          },
-          "transport": {
-            "$ref": "#/components/schemas/TransportConfig"
+          {
+            "type": "object",
+            "required": [
+              "transport"
+            ],
+            "properties": {
+              "format": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/FormatConfig"
+                  }
+                ],
+                "nullable": true
+              },
+              "max_queued_records": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Backpressure threshold.\n\nMaximal number of records queued by the endpoint before the endpoint\nis paused by the backpressure mechanism.\n\nFor input endpoints, this setting bounds the number of records that have\nbeen received from the input transport but haven't yet been consumed by\nthe circuit since the circuit, since the circuit is still busy processing\nprevious inputs.\n\nFor output endpoints, this setting bounds the number of records that have\nbeen produced by the circuit but not yet sent via the output transport endpoint\nnor stored in the output buffer (see `enable_output_buffer`).\n\nNote that this is not a hard bound: there can be a small delay between\nthe backpressure mechanism is triggered and the endpoint is paused, during\nwhich more data may be queued.\n\nThe default is 1 million.",
+                "minimum": 0
+              },
+              "transport": {
+                "$ref": "#/components/schemas/TransportConfig"
+              }
+            }
           }
-        }
+        ],
+        "description": "A data connector's configuration"
       },
       "ConnectorDescr": {
         "type": "object",
@@ -3263,7 +3452,8 @@
             "description": "Name of the program to create a pipeline for.",
             "nullable": true
           }
-        }
+        },
+        "additionalProperties": false
       },
       "CreateOrReplacePipelineResponse": {
         "type": "object",
@@ -3372,6 +3562,114 @@
       },
       "CsvParserConfig": {
         "type": "object"
+      },
+      "DeltaTableIngestMode": {
+        "type": "string",
+        "description": "Delta table read mode.\n\nThree options are available:\n\n* `snapshot` - read a snapshot of the table and stop.\n\n* `follow` - continuously ingest changes to the table, starting from a specified version\nor timestamp.\n\n* `snapshot_and_follow` - read a snapshot of the table before switching to continuous ingestion\nmode.",
+        "enum": [
+          "snapshot",
+          "follow",
+          "snapshot_and_follow"
+        ]
+      },
+      "DeltaTableReaderConfig": {
+        "type": "object",
+        "description": "Delta table output connector configuration.",
+        "required": [
+          "uri",
+          "mode"
+        ],
+        "properties": {
+          "datetime": {
+            "type": "string",
+            "description": "Optional timestamp for the snapshot in the ISO-8601/RFC-3339 format, e.g.,\n\"2024-12-09T16:09:53+00:00.\n\nWhen this option is set, the connector finds and opens the version of the table as of the\nspecified point in time.  In `snapshot` and `snapshot_and_follow` modes, it retrieves the\nsnapshot of this version of the table (based on the server time recorded in the transaction\nlog, not the event time encoded in the data).  In `follow` and `snapshot_and_follow` modes, it\nfollows transaction log records **after** this version.\n\nNote: at most one of `version` and `datetime` options can be specified.\nWhen neither of the two options is specified, the latest committed version of the table\nis used.",
+            "nullable": true
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DeltaTableIngestMode"
+          },
+          "snapshot_filter": {
+            "type": "string",
+            "description": "Optional row filter.\n\nThis option is only valid when `mode` is set to `snapshot` or `snapshot_and_follow`.\n\nWhen specified, only rows that satisfy the filter condition are included in the\nsnapshot.  The condition must be a valid SQL Boolean expression that can be used in\nthe `where` clause of the `select * from snapshot where ...` query.\n\nThis option can be used to specify the range of event times to include in the snapshot,\ne.g.: `ts BETWEEN '2005-01-01 00:00:00' AND '2010-12-31 23:59:59'`.",
+            "nullable": true
+          },
+          "timestamp_column": {
+            "type": "string",
+            "description": "Table column that serves as an event timestamp.\n\n\nWhen this option is specified, and `mode` is one of `snapshot` or `snapshot_and_follow`,\nthe snapshot of the table is ingested in the timestamp order.  This setting is required\nfor tables declared with the\n[`LATENESS`](https://www.feldera.com/docs/sql/streaming#lateness-expressions) attribute\nin Feldera SQL. It impacts the performance of the connector, since data must be sorted\nbefore pushing it to the pipeline; therefore it is not recommended to use this\nsettings for tables without `LATENESS`.",
+            "nullable": true
+          },
+          "uri": {
+            "type": "string",
+            "description": "Table URI.\n\nExample: \"s3://feldera-fraud-detection-data/demographics_train\""
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optional table version.\n\nWhen this option is set, the connector finds and opens the specified version of the table.\nIn `snapshot` and `snapshot_and_follow` modes, it retrieves the snapshot of this version of\nthe table.  In `follow` and `snapshot_and_follow` modes, it follows transaction log records\n**after** this version.\n\nNote: at most one of `version` and `datetime` options can be specified.\nWhen neither of the two options is specified, the latest committed version of the table\nis used.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": {
+          "type": "string",
+          "description": "Storage options for configuring backend object store.\n\nFor specific options available for different storage backends, see:\n* [Azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html)\n* [Amazon S3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html)\n* [Google Cloud Storage options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html)"
+        }
+      },
+      "DeltaTableWriteMode": {
+        "type": "string",
+        "description": "Delta table write mode.\n\nDetermines how the Delta table connector handles an existing table at the target location.",
+        "enum": [
+          "append",
+          "truncate",
+          "error_if_exists"
+        ]
+      },
+      "DeltaTableWriterConfig": {
+        "type": "object",
+        "description": "Delta table output connector configuration.",
+        "required": [
+          "uri"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/DeltaTableWriteMode"
+          },
+          "uri": {
+            "type": "string",
+            "description": "Table URI."
+          }
+        },
+        "additionalProperties": {
+          "type": "string",
+          "description": "Storage options for configuring backend object store.\n\nFor specific options available for different storage backends, see:\n* [Azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html)\n* [Amazon S3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html)\n* [Google Cloud Storage options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html)"
+        }
+      },
+      "Demo": {
+        "type": "object",
+        "required": [
+          "title",
+          "description",
+          "prefix",
+          "steps"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Description of the demo."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Demo prefix prepended to each of the entities."
+          },
+          "steps": {
+            "type": "array",
+            "items": {},
+            "description": "The steps which define the entities to create."
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the demo."
+          }
+        }
       },
       "EgressMode": {
         "type": "string",
@@ -3497,6 +3795,25 @@
         ],
         "description": "Describes an input connector configuration"
       },
+      "IntervalUnit": {
+        "type": "string",
+        "description": "The specified units for SQL Interval types.\n\n`INTERVAL 1 DAY`, `INTERVAL 1 DAY TO HOUR`, `INTERVAL 1 DAY TO MINUTE`,\nwould yield `Day`, `DayToHour`, `DayToMinute`, as the `IntervalUnit` respectively.",
+        "enum": [
+          "DAY",
+          "DAYTOHOUR",
+          "DAYTOMINUTE",
+          "DAYTOSECOND",
+          "HOUR",
+          "HOURTOMINUTE",
+          "HOURTOSECOND",
+          "MINUTE",
+          "MINUTETOSECOND",
+          "MONTH",
+          "SECOND",
+          "YEAR",
+          "YEARTOMONTH"
+        ]
+      },
       "JsonEncoderConfig": {
         "type": "object",
         "properties": {
@@ -3527,7 +3844,8 @@
           "default",
           "debezium_mysql",
           "snowflake",
-          "kafka_connect_json_converter"
+          "kafka_connect_json_converter",
+          "pandas"
         ]
       },
       "JsonParserConfig": {
@@ -3557,6 +3875,31 @@
           "raw"
         ]
       },
+      "KafkaHeader": {
+        "type": "object",
+        "description": "Kafka message header.",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KafkaHeaderValue"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "KafkaHeaderValue": {
+        "type": "string",
+        "format": "binary",
+        "description": "Kafka header value encoded as a UTF-8 string or a byte array."
+      },
       "KafkaInputConfig": {
         "type": "object",
         "description": "Configuration for reading data from Kafka topics with `InputTransport`.",
@@ -3577,6 +3920,11 @@
             "format": "int32",
             "description": "Maximum timeout in seconds to wait for the endpoint to join the Kafka\nconsumer group during initialization.",
             "minimum": 0
+          },
+          "kafka_service": {
+            "type": "string",
+            "description": "If specified, this service is used to provide defaults for the Kafka options.",
+            "nullable": true
           },
           "log_level": {
             "allOf": [
@@ -3672,11 +4020,23 @@
             ],
             "nullable": true
           },
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KafkaHeader"
+            },
+            "description": "Kafka headers to be added to each message produced by this connector."
+          },
           "initialization_timeout_secs": {
             "type": "integer",
             "format": "int32",
             "description": "Maximum timeout in seconds to wait for the endpoint to connect to\na Kafka broker.\n\nDefaults to 60.",
             "minimum": 0
+          },
+          "kafka_service": {
+            "type": "string",
+            "description": "If specified, this service is used to provide defaults for the Kafka options.",
+            "nullable": true
           },
           "log_level": {
             "allOf": [
@@ -3735,7 +4095,7 @@
             "items": {
               "type": "string"
             },
-            "description": "List of bootstrap servers, each formatted as hostname:port (e.g.,\n\"example.com:1234\"). It will be used to set the bootstrap.servers\nKafka option."
+            "description": "List of bootstrap servers, each formatted as hostname:port (e.g.,\n\"example.com:1234\"). It will be used to set the `bootstrap.servers`\nKafka option."
           },
           "options": {
             "type": "object",
@@ -3875,7 +4235,8 @@
             "description": "Name of the program to create a pipeline for.",
             "nullable": true
           }
-        }
+        },
+        "additionalProperties": false
       },
       "NewPipelineResponse": {
         "type": "object",
@@ -3972,13 +4333,29 @@
           }
         }
       },
+      "OutputBufferConfig": {
+        "type": "object",
+        "properties": {
+          "enable_output_buffer": {
+            "type": "boolean",
+            "description": "Enable output buffering.\n\nThe output buffering mechanism allows decoupling the rate at which the pipeline\npushes changes to the output transport from the rate of input changes.\n\nBy default, output updates produced by the pipeline are pushed directly to\nthe output transport. Some destinations may prefer to receive updates in fewer\nbigger batches. For instance, when writing Parquet files, producing\none bigger file every few minutes is usually better than creating\nsmall files every few milliseconds.\n\nTo achieve such input/output decoupling, users can enable output buffering by\nsetting the `enable_output_buffer` flag to `true`.  When buffering is enabled, output\nupdates produced by the pipeline are consolidated in an internal buffer and are\npushed to the output transport when one of several conditions is satisfied:\n\n* data has been accumulated in the buffer for more than `max_output_buffer_time_millis`\nmilliseconds.\n* buffer size exceeds `max_output_buffer_size_records` records.\n\nThis flag is `false` by default."
+          },
+          "max_output_buffer_size_records": {
+            "type": "integer",
+            "description": "Maximum number of updates to be kept in the output buffer.\n\nThis parameter bounds the maximal size of the buffer.\nNote that the size of the buffer is not always equal to the\ntotal number of updates output by the pipeline. Updates to the\nsame record can overwrite or cancel previous updates.\n\nBy default, the buffer can grow indefinitely until one of\nthe other output conditions is satisfied.\n\nNOTE: this configuration option requires the `enable_output_buffer` flag\nto be set.",
+            "minimum": 0
+          },
+          "max_output_buffer_time_millis": {
+            "type": "integer",
+            "description": "Maximum time in milliseconds data is kept in the output buffer.\n\nBy default, data is kept in the buffer indefinitely until one of\nthe other output conditions is satisfied.  When this option is\nset the buffer will be flushed at most every\n`max_output_buffer_time_millis` milliseconds.\n\nNOTE: this configuration option requires the `enable_output_buffer` flag\nto be set.",
+            "minimum": 0
+          }
+        }
+      },
       "OutputEndpointConfig": {
         "allOf": [
           {
             "$ref": "#/components/schemas/ConnectorConfig"
-          },
-          {
-            "$ref": "#/components/schemas/OutputBufferConfig"
           },
           {
             "type": "object",
@@ -4056,8 +4433,22 @@
                 "description": "Minimal input batch size.\n\nThe controller delays pushing input records to the circuit until at\nleast `min_batch_size_records` records have been received (total\nacross all endpoints) or `max_buffering_delay_usecs` microseconds\nhave passed since at least one input records has been buffered.\nDefaults to 0.",
                 "minimum": 0
               },
+              "min_storage_rows": {
+                "type": "integer",
+                "description": "The minimum estimated number of rows in a batch to write it to storage.\nThis is provided for debugging and fine-tuning and should ordinarily be\nleft unset. It only has an effect when `storage` is set to true.\n\nA value of 0 will write even empty batches to storage, and nonzero\nvalues provide a threshold.  `usize::MAX` would effectively disable\nstorage.",
+                "nullable": true,
+                "minimum": 0
+              },
               "resources": {
                 "$ref": "#/components/schemas/ResourceConfig"
+              },
+              "storage": {
+                "type": "boolean",
+                "description": "Should persistent storage be enabled for this pipeline?\n\n- If `false` (default), the pipeline's state is kept in in-memory data-structures.\nThis is useful if the pipeline is ephemeral and does not need to be recovered\nafter a restart. The pipeline will most likely run faster since it does not\nneed to read from, or write to disk\n\n- If `true`, the pipeline state is stored in the specified location,\nis persisted across restarts, and can be checkpointed and recovered.\nThis feature is currently experimental."
+              },
+              "tcp_metrics_exporter": {
+                "type": "boolean",
+                "description": "Enable the TCP metrics exporter.\n\nThis is used for development purposes only.\nIf enabled, the `metrics-observer` CLI tool\ncan be used to inspect metrics from the pipeline.\n\nBecause of how Rust metrics work, this is only honored for the first\npipeline to be instantiated within a given process."
               },
               "workers": {
                 "type": "integer",
@@ -4082,7 +4473,7 @@
               },
               "name": {
                 "type": "string",
-                "description": "Pipeline name",
+                "description": "Pipeline name.",
                 "nullable": true
               },
               "outputs": {
@@ -4092,15 +4483,18 @@
                   "$ref": "#/components/schemas/OutputEndpointConfig"
                 }
               },
-              "storage_location": {
-                "type": "string",
-                "description": "Storage location.\n\nAn identifier for location where the pipeline's state is stored.\nIf not set, the pipeline's state is not persisted across\nrestarts.",
+              "storage_config": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/StorageConfig"
+                  }
+                ],
                 "nullable": true
               }
             }
           }
         ],
-        "description": "Pipeline configuration specified by the user when creating\na new pipeline instance.\n\nThis is the shape of the overall pipeline configuration, but is not\nthe publicly exposed type with which users configure pipelines."
+        "description": "Pipeline configuration specified by the user when creating\na new pipeline instance.\n\nThis is the shape of the overall pipeline configuration. It encapsulates a\n[`RuntimeConfig`], which is the publicly exposed way for users to configure\npipelines."
       },
       "PipelineDescr": {
         "type": "object",
@@ -4153,6 +4547,7 @@
           "revision",
           "pipeline",
           "connectors",
+          "services_for_connectors",
           "program",
           "config"
         ],
@@ -4175,6 +4570,16 @@
           },
           "revision": {
             "$ref": "#/components/schemas/Revision"
+          },
+          "services_for_connectors": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ServiceDescr"
+              }
+            },
+            "description": "The versioned services for each connector."
           }
         }
       },
@@ -4235,6 +4640,20 @@
           "ShuttingDown",
           "Failed"
         ]
+      },
+      "ProgramConfig": {
+        "type": "object",
+        "description": "Program configuration.",
+        "properties": {
+          "profile": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CompilationProfile"
+              }
+            ],
+            "nullable": true
+          }
+        }
       },
       "ProgramDescr": {
         "type": "object",
@@ -4479,6 +4898,9 @@
               "$ref": "#/components/schemas/Field"
             }
           },
+          "materialized": {
+            "type": "boolean"
+          },
           "name": {
             "type": "string"
           }
@@ -4515,6 +4937,11 @@
             "nullable": true,
             "minimum": 0
           },
+          "storage_class": {
+            "type": "string",
+            "description": "Storage class to use for an instance of this pipeline.\nThe class determines storage performance such as IOPS and throughput.",
+            "nullable": true
+          },
           "storage_mb_max": {
             "type": "integer",
             "format": "int64",
@@ -4549,8 +4976,22 @@
             "description": "Minimal input batch size.\n\nThe controller delays pushing input records to the circuit until at\nleast `min_batch_size_records` records have been received (total\nacross all endpoints) or `max_buffering_delay_usecs` microseconds\nhave passed since at least one input records has been buffered.\nDefaults to 0.",
             "minimum": 0
           },
+          "min_storage_rows": {
+            "type": "integer",
+            "description": "The minimum estimated number of rows in a batch to write it to storage.\nThis is provided for debugging and fine-tuning and should ordinarily be\nleft unset. It only has an effect when `storage` is set to true.\n\nA value of 0 will write even empty batches to storage, and nonzero\nvalues provide a threshold.  `usize::MAX` would effectively disable\nstorage.",
+            "nullable": true,
+            "minimum": 0
+          },
           "resources": {
             "$ref": "#/components/schemas/ResourceConfig"
+          },
+          "storage": {
+            "type": "boolean",
+            "description": "Should persistent storage be enabled for this pipeline?\n\n- If `false` (default), the pipeline's state is kept in in-memory data-structures.\nThis is useful if the pipeline is ephemeral and does not need to be recovered\nafter a restart. The pipeline will most likely run faster since it does not\nneed to read from, or write to disk\n\n- If `true`, the pipeline state is stored in the specified location,\nis persisted across restarts, and can be checkpointed and recovered.\nThis feature is currently experimental."
+          },
+          "tcp_metrics_exporter": {
+            "type": "boolean",
+            "description": "Enable the TCP metrics exporter.\n\nThis is used for development purposes only.\nIf enabled, the `metrics-observer` CLI tool\ncan be used to inspect metrics from the pipeline.\n\nBecause of how Rust metrics work, this is only honored for the first\npipeline to be instantiated within a given process."
           },
           "workers": {
             "type": "integer",
@@ -4856,28 +5297,178 @@
         }
       },
       "SqlType": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "SQL `BOOLEAN` type.",
+            "enum": [
+              "BOOLEAN"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `TINYINT` type.",
+            "enum": [
+              "TINYINT"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `SMALLINT` or `INT2` type.",
+            "enum": [
+              "SMALLINT"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `INTEGER`, `INT`, `SIGNED`, `INT4` type.",
+            "enum": [
+              "INTEGER"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `BIGINT` or `INT64` type.",
+            "enum": [
+              "BIGINT"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `REAL` or `FLOAT4` or `FLOAT32` type.",
+            "enum": [
+              "REAL"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `DOUBLE` or `FLOAT8` or `FLOAT64` type.",
+            "enum": [
+              "DOUBLE"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `DECIMAL` or `DEC` or `NUMERIC` type.",
+            "enum": [
+              "DECIMAL"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `CHAR(n)` or `CHARACTER(n)` type.",
+            "enum": [
+              "CHAR"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `VARCHAR`, `CHARACTER VARYING`, `TEXT`, or `STRING` type.",
+            "enum": [
+              "VARCHAR"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `BINARY(n)` type.",
+            "enum": [
+              "BINARY"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `VARBINARY` or `BYTEA` type.",
+            "enum": [
+              "VARBINARY"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `TIME` type.",
+            "enum": [
+              "TIME"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `DATE` type.",
+            "enum": [
+              "DATE"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `TIMESTAMP` type.",
+            "enum": [
+              "TIMESTAMP"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "Interval"
+            ],
+            "properties": {
+              "Interval": {
+                "$ref": "#/components/schemas/IntervalUnit"
+              }
+            }
+          },
+          {
+            "type": "string",
+            "description": "SQL `ARRAY` type.",
+            "enum": [
+              "ARRAY"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A complex SQL struct type (`CREATE TYPE x ...`).",
+            "enum": [
+              "STRUCT"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `MAP` type.",
+            "enum": [
+              "MAP"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "SQL `NULL` type.",
+            "enum": [
+              "NULL"
+            ]
+          }
+        ],
+        "description": "The available SQL types as specified in `CREATE` statements."
+      },
+      "StorageCacheConfig": {
         "type": "string",
-        "description": "The available SQL types as specified in `CREATE` statements.",
+        "description": "How to cache access to storage within a Feldera pipeline.",
         "enum": [
-          "BOOLEAN",
-          "TINYINT",
-          "SMALLINT",
-          "INTEGER",
-          "BIGINT",
-          "REAL",
-          "DOUBLE",
-          "DECIMAL",
-          "CHAR",
-          "VARCHAR",
-          "BINARY",
-          "VARBINARY",
-          "TIME",
-          "DATE",
-          "TIMESTAMP",
-          "INTERVAL",
-          "ARRAY",
-          "NULL"
+          "page_cache",
+          "feldera_cache"
         ]
+      },
+      "StorageConfig": {
+        "type": "object",
+        "description": "Configuration for persistent storage in a [`PipelineConfig`].",
+        "required": [
+          "path",
+          "cache"
+        ],
+        "properties": {
+          "cache": {
+            "$ref": "#/components/schemas/StorageCacheConfig"
+          },
+          "path": {
+            "type": "string",
+            "description": "The location where the pipeline state is stored or will be stored.\n\nIt should point to a path on the file-system of the machine/container\nwhere the pipeline will run. If that path doesn't exist yet, or if it\ndoes not contain any checkpoints, then the pipeline creates it and\nstarts from an initial state in which no data has yet been received. If\nit does exist, then the pipeline starts from the most recent checkpoint\nthat already exists there. In either case, (further) checkpoints will be\nwritten there."
+          }
+        }
       },
       "TenantId": {
         "type": "string",
@@ -4996,6 +5587,42 @@
           {
             "type": "object",
             "required": [
+              "name",
+              "config"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/DeltaTableReaderConfig"
+              },
+              "name": {
+                "type": "string",
+                "enum": [
+                  "delta_table_input"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "config"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/DeltaTableWriterConfig"
+              },
+              "name": {
+                "type": "string",
+                "enum": [
+                  "delta_table_output"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
               "name"
             ],
             "properties": {
@@ -5092,7 +5719,8 @@
             "description": "New program to create a pipeline for. If absent, program will be set to\nNULL.",
             "nullable": true
           }
-        }
+        },
+        "additionalProperties": false
       },
       "UpdatePipelineResponse": {
         "type": "object",

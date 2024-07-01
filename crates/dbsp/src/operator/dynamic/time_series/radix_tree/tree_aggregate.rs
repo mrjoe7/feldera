@@ -309,7 +309,7 @@ where
 mod test {
     use super::super::RadixTreeCursor;
     use crate::{
-        algebra::DefaultSemigroup,
+        algebra::{AddAssignByRef, DefaultSemigroup},
         dynamic::{DowncastTrait, DynData, DynDataTyped, DynPair, Erase},
         operator::{
             dynamic::{
@@ -332,7 +332,6 @@ mod test {
     };
     use std::{
         collections::{btree_map::Entry, BTreeMap},
-        ops::AddAssign,
         sync::{Arc, Mutex},
     };
 
@@ -381,8 +380,9 @@ mod test {
                     &TreeAggregateFactories::new::<u64, u64>(),
                     &DynAggregatorImpl::new(aggregator),
                 );
+            let factory = BatchReaderFactories::new::<Prefix<u64>, TreeNode<u64, u64>, ZWeight>();
             aggregate
-                .dyn_integrate_trace(&BatchReaderFactories::new::<Prefix<u64>, TreeNode<u64, u64>, ZWeight>())
+                .dyn_integrate_trace(&factory)
                 .apply(move |tree_trace| {
                     println!("Radix tree:");
                     let mut treestr = String::new();
@@ -391,7 +391,7 @@ mod test {
                     tree_trace
                         .cursor()
                         .validate(&contents_clone.lock().unwrap(), &|acc, val| {
-                            acc.downcast_mut_checked::<u64>().add_assign(val.downcast_checked::<u64>())
+                            acc.downcast_mut_checked::<u64>().add_assign_by_ref(&val.downcast_checked::<u64>())
                         });
                     test_aggregate_range::<u64, u64, _, DefaultSemigroup<_>>(
                         &mut tree_trace.cursor(),

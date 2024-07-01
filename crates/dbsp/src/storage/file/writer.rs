@@ -4,12 +4,12 @@
 //! 2-column layer file.  To write more columns, either add another `Writer<N>`
 //! struct, which is easily done, or mark the currently private `Writer` as
 //! `pub`.
+use std::sync::Arc;
 use std::{
     marker::PhantomData,
     mem::{replace, take},
     ops::Range,
     path::PathBuf,
-    rc::Rc,
 };
 
 use binrw::{
@@ -32,6 +32,7 @@ use crate::storage::{
 use crate::{
     dynamic::{DataTrait, DeserializeDyn, SerializeDyn},
     storage::file::ItemFactory,
+    Runtime,
 };
 
 use super::cache::FileCache;
@@ -192,7 +193,7 @@ where
 }
 
 struct ColumnWriter {
-    parameters: Rc<Parameters>,
+    parameters: Arc<Parameters>,
     column_index: usize,
     rows: Range<u64>,
     data_block: DataBlockBuilder,
@@ -201,7 +202,7 @@ struct ColumnWriter {
 }
 
 impl ColumnWriter {
-    fn new(factories: &AnyFactories, parameters: &Rc<Parameters>, column_index: usize) -> Self {
+    fn new(factories: &AnyFactories, parameters: &Arc<Parameters>, column_index: usize) -> Self {
         ColumnWriter {
             parameters: parameters.clone(),
             column_index,
@@ -217,12 +218,11 @@ impl ColumnWriter {
         replace(&mut self.rows, end..end)
     }
 
-    fn finish<W, K, A>(
+    fn finish<K, A>(
         &mut self,
-        block_writer: &mut BlockWriter<W>,
+        block_writer: &mut BlockWriter,
     ) -> Result<FileTrailerColumn, StorageError>
     where
-        W: Storage,
         K: DataTrait + ?Sized,
         A: DataTrait + ?Sized,
     {
@@ -246,7 +246,7 @@ impl ColumnWriter {
                 });
             } else if !self.index_blocks[level].is_empty() {
                 let index_block = self.index_blocks[level].take().build();
-                self.write_index_block::<W, K>(block_writer, index_block, level)?;
+                self.write_index_block::<K>(block_writer, index_block, level)?;
             }
             level += 1;
         }
@@ -275,13 +275,12 @@ impl ColumnWriter {
         &mut self.index_blocks[level]
     }
 
-    fn write_data_block<W, K>(
+    fn write_data_block<K>(
         &mut self,
-        block_writer: &mut BlockWriter<W>,
+        block_writer: &mut BlockWriter,
         data_block: DataBlock<K>,
     ) -> Result<(), StorageError>
     where
-        W: Storage,
         K: DataTrait + ?Sized,
     {
         let location = block_writer.write_block(data_block.raw)?;
@@ -291,19 +290,18 @@ impl ColumnWriter {
             &data_block.min_max,
             data_block.n_values as u64,
         ) {
-            self.write_index_block::<W, K>(block_writer, index_block, 0)?;
+            self.write_index_block::<K>(block_writer, index_block, 0)?;
         }
         Ok(())
     }
 
-    fn write_index_block<W, K>(
+    fn write_index_block<K>(
         &mut self,
-        block_writer: &mut BlockWriter<W>,
+        block_writer: &mut BlockWriter,
         mut index_block: IndexBlock<K>,
         mut level: usize,
     ) -> Result<(BlockLocation, u64), StorageError>
     where
-        W: Storage,
         K: DataTrait + ?Sized,
     {
         loop {
@@ -322,14 +320,13 @@ impl ColumnWriter {
         }
     }
 
-    fn add_item<W, K, A>(
+    fn add_item<K, A>(
         &mut self,
-        block_writer: &mut BlockWriter<W>,
+        block_writer: &mut BlockWriter,
         item: (&K, &A),
         row_group: &Option<Range<u64>>,
     ) -> Result<(), StorageError>
     where
-        W: Storage,
         K: DataTrait + ?Sized,
         A: DataTrait + ?Sized,
     {
@@ -379,7 +376,7 @@ impl StrideBuilder {
 }
 
 struct DataBlockBuilder {
-    parameters: Rc<Parameters>,
+    parameters: Arc<Parameters>,
     raw: FBuf,
     value_offsets: Vec<usize>,
     value_offset_stride: StrideBuilder,
@@ -401,7 +398,7 @@ struct DataBlock<K: ?Sized> {
 }
 
 impl DataBlockBuilder {
-    fn new(factories: &AnyFactories, parameters: &Rc<Parameters>) -> Self {
+    fn new(factories: &AnyFactories, parameters: &Arc<Parameters>) -> Self {
         let mut raw = FBuf::with_capacity(parameters.min_data_block);
         raw.resize(DataBlockHeader::LEN, 0);
         Self {
@@ -613,7 +610,7 @@ impl ContiguousRanges {
 }
 
 struct IndexBlockBuilder {
-    parameters: Rc<Parameters>,
+    parameters: Arc<Parameters>,
     column_index: usize,
     raw: FBuf,
     entries: Vec<IndexEntry>,
@@ -683,7 +680,7 @@ where
 impl IndexBlockBuilder {
     fn new(
         factories: &AnyFactories,
-        parameters: &Rc<Parameters>,
+        parameters: &Arc<Parameters>,
         column_index: usize,
         child_type: NodeType,
     ) -> Self {
@@ -864,20 +861,14 @@ impl IndexBlockBuilder {
     }
 }
 
-struct BlockWriter<W>
-where
-    W: Storage,
-{
-    cache: Rc<FileCache<W>>,
+struct BlockWriter {
+    cache: Arc<FileCache>,
     file_handle: Option<FileHandle>,
     offset: u64,
 }
 
-impl<W> BlockWriter<W>
-where
-    W: Storage,
-{
-    fn new(cache: &Rc<FileCache<W>>, file_handle: FileHandle) -> Self {
+impl BlockWriter {
+    fn new(cache: &Arc<FileCache>, file_handle: FileHandle) -> Self {
         Self {
             cache: cache.clone(),
             file_handle: Some(file_handle),
@@ -900,10 +891,7 @@ where
     }
 }
 
-impl<W> Drop for BlockWriter<W>
-where
-    W: Storage,
-{
+impl Drop for BlockWriter {
     fn drop(&mut self) {
         self.file_handle
             .take()
@@ -917,36 +905,31 @@ where
 /// safety to ensure that the data and auxiliary values written to columns are
 /// all the same type.  Thus, [`Writer1`] and [`Writer2`] exist for writing
 /// 1-column and 2-column layer files, respectively, with added type safety.
-struct Writer<W>
-where
-    W: Storage,
-{
-    writer: BlockWriter<W>,
+struct Writer {
+    writer: BlockWriter,
     cws: Vec<ColumnWriter>,
     finished_columns: Vec<FileTrailerColumn>,
 }
 
-impl<W> Writer<W>
-where
-    W: Storage,
-{
+impl Writer {
     pub fn new(
         factories: &[&AnyFactories],
-        writer: &Rc<FileCache<W>>,
+        writer: &Arc<FileCache>,
         parameters: Parameters,
         n_columns: usize,
     ) -> Result<Self, StorageError> {
         assert_eq!(factories.len(), n_columns);
 
-        let parameters = Rc::new(parameters);
+        let parameters = Arc::new(parameters);
         let cws = factories
             .iter()
             .enumerate()
             .map(|(column, factories)| ColumnWriter::new(factories, &parameters, column))
             .collect();
         let finished_columns = Vec::with_capacity(n_columns);
+        let worker = format!("w{}-", Runtime::worker_index());
         let writer = Self {
-            writer: BlockWriter::new(writer, writer.create()?),
+            writer: BlockWriter::new(writer, writer.create_with_prefix(&worker)?),
             cws,
             finished_columns,
         };
@@ -982,7 +965,7 @@ where
         }
 
         self.finished_columns
-            .push(self.cws[column].finish::<W, K, A>(&mut self.writer)?);
+            .push(self.cws[column].finish::<K, A>(&mut self.writer)?);
         Ok(())
     }
 
@@ -1008,14 +991,14 @@ where
         self.cws[0].rows.end
     }
 
-    pub fn storage(&self) -> &Rc<FileCache<W>> {
+    pub fn storage(&self) -> &Arc<FileCache> {
         &self.writer.cache
     }
 }
 
 /// 1-column layer file writer.
 ///
-/// `Writer1<W, K0, A0>` writes a new 1-column layer file in which column 0 has
+/// `Writer1<K0, A0>` writes a new 1-column layer file in which column 0 has
 /// key and auxiliary data types `(K0, A0)`.
 ///
 /// # Example
@@ -1025,37 +1008,36 @@ where
 ///
 /// ```
 /// # use dbsp::dynamic::{DynData, Erase, DynUnit};
-/// # use dbsp::storage::file::{cache::default_cache_for_thread, writer::{Parameters, Writer1}};
+/// # use dbsp::storage::file::{writer::{Parameters, Writer1}};
+/// use dbsp::storage::file::cache::default_cache;
 /// use dbsp::storage::file::Factories;
 /// let factories = Factories::<DynData, DynUnit>::new::<u32, ()>();
 /// let mut file =
-///     Writer1::new(&factories, &default_cache_for_thread(), Parameters::default()).unwrap();
+///     Writer1::new(&factories, &default_cache(), Parameters::default()).unwrap();
 /// for i in 0..1000_u32 {
 ///     file.write0((i.erase(), ().erase())).unwrap();
 /// }
 /// file.close().unwrap();
 /// ```
-pub struct Writer1<W, K0, A0>
+pub struct Writer1<K0, A0>
 where
-    W: Storage,
     K0: DataTrait + ?Sized,
     A0: DataTrait + ?Sized,
 {
-    inner: Writer<W>,
+    inner: Writer,
     pub(crate) factories: Factories<K0, A0>,
     _phantom: PhantomData<fn(&K0, &A0)>,
 }
 
-impl<W, K0, A0> Writer1<W, K0, A0>
+impl<K0, A0> Writer1<K0, A0>
 where
-    W: Storage,
     K0: DataTrait + ?Sized,
     A0: DataTrait + ?Sized,
 {
     /// Creates a new writer with the given parameters.
     pub fn new(
         factories: &Factories<K0, A0>,
-        storage: &Rc<FileCache<W>>,
+        storage: &Arc<FileCache>,
         parameters: Parameters,
     ) -> Result<Self, StorageError> {
         Ok(Self {
@@ -1083,28 +1065,28 @@ where
     }
 
     /// Returns the storage used for this writer.
-    pub fn storage(&self) -> &Rc<FileCache<W>> {
+    pub fn storage(&self) -> &Arc<FileCache> {
         self.inner.storage()
     }
 
     /// Finishes writing the layer file and returns a reader for it.
     pub fn into_reader(
         self,
-    ) -> Result<Reader<W, (&'static K0, &'static A0, ())>, super::reader::Error> {
+    ) -> Result<Reader<(&'static K0, &'static A0, ())>, super::reader::Error> {
         let storage = self.storage().clone();
         let any_factories = self.factories.any_factories();
 
         let (file_handle, path) = self.close()?;
         Reader::new(
             &[&any_factories],
-            Rc::new(ImmutableFileRef::new(&storage, file_handle, path)),
+            Arc::new(ImmutableFileRef::new(&storage, file_handle, path)),
         )
     }
 }
 
 /// 2-column layer file writer.
 ///
-/// `Writer2<W, K0, A0, K1, A1>` writes a new 2-column layer file in which
+/// `Writer2<K0, A0, K1, A1>` writes a new 2-column layer file in which
 /// column 0 has key and auxiliary data types `(K0, A0)` and column 1 has `(K1,
 /// A1)`.
 ///
@@ -1121,11 +1103,11 @@ where
 ///
 /// ```
 /// # use dbsp::dynamic::{DynData, DynUnit};
-/// use dbsp::storage::file::{cache::default_cache_for_thread, writer::{Parameters, Writer2}};
+/// use dbsp::storage::file::{cache::default_cache, writer::{Parameters, Writer2}};
 /// # use dbsp::storage::file::Factories;
 /// let factories = Factories::<DynData, DynUnit>::new::<u32, ()>();
 /// let mut file =
-///     Writer2::new(&factories, &factories, &default_cache_for_thread(), Parameters::default()).unwrap();
+///     Writer2::new(&factories, &factories, &default_cache(), Parameters::default()).unwrap();
 /// for i in 0..1000_u32 {
 ///     for j in 0..10_u32 {
 ///         file.write1((&j, &())).unwrap();
@@ -1134,23 +1116,21 @@ where
 /// }
 /// file.close().unwrap();
 /// ```
-pub struct Writer2<W, K0, A0, K1, A1>
+pub struct Writer2<K0, A0, K1, A1>
 where
-    W: Storage,
     K0: DataTrait + ?Sized,
     A0: DataTrait + ?Sized,
     K1: DataTrait + ?Sized,
     A1: DataTrait + ?Sized,
 {
-    inner: Writer<W>,
+    inner: Writer,
     pub(crate) factories0: Factories<K0, A0>,
     pub(crate) factories1: Factories<K1, A1>,
     _phantom: PhantomData<fn(&K0, &A0, &K1, &A1)>,
 }
 
-impl<W, K0, A0, K1, A1> Writer2<W, K0, A0, K1, A1>
+impl<K0, A0, K1, A1> Writer2<K0, A0, K1, A1>
 where
-    W: Storage,
     K0: DataTrait + ?Sized,
     A0: DataTrait + ?Sized,
     K1: DataTrait + ?Sized,
@@ -1160,7 +1140,7 @@ where
     pub fn new(
         factories0: &Factories<K0, A0>,
         factories1: &Factories<K1, A1>,
-        storage: &Rc<FileCache<W>>,
+        storage: &Arc<FileCache>,
         parameters: Parameters,
     ) -> Result<Self, StorageError> {
         Ok(Self {
@@ -1209,7 +1189,7 @@ where
     }
 
     /// Returns the storage used for this writer.
-    pub fn storage(&self) -> &Rc<FileCache<W>> {
+    pub fn storage(&self) -> &Arc<FileCache> {
         self.inner.storage()
     }
 
@@ -1218,17 +1198,16 @@ where
     pub fn into_reader(
         self,
     ) -> Result<
-        Reader<W, (&'static K0, &'static A0, (&'static K1, &'static A1, ()))>,
+        Reader<(&'static K0, &'static A0, (&'static K1, &'static A1, ()))>,
         super::reader::Error,
     > {
         let storage = self.storage().clone();
         let any_factories0 = self.factories0.any_factories();
         let any_factories1 = self.factories1.any_factories();
-
         let (file_handle, path) = self.close()?;
         Reader::new(
             &[&any_factories0, &any_factories1],
-            Rc::new(ImmutableFileRef::new(&storage, file_handle, path)),
+            Arc::new(ImmutableFileRef::new(&storage, file_handle, path)),
         )
     }
 }

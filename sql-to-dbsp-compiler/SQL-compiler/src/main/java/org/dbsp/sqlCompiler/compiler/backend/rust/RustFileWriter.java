@@ -5,13 +5,13 @@ import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.BetaReduction;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
-import org.dbsp.sqlCompiler.compiler.visitors.inner.SanitizeNames;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitRewriter;
 import org.dbsp.sqlCompiler.ir.DBSPFunction;
 import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
 import org.dbsp.sqlCompiler.ir.IDBSPNode;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeCode;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeSemigroup;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeSemigroup;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeStruct;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
 import org.dbsp.util.IndentStream;
 import org.dbsp.util.Linq;
@@ -26,10 +26,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.IntStream;
 
-/**
- * This class helps generate Rust code.
- * It is given a set of circuit and functions and generates a compilable Rust file.
- */
+/** This class helps generate Rust code.
+ * It is given a set of circuit and functions and generates a compilable Rust file. */
 public class RustFileWriter {
     final List<IDBSPNode> toWrite;
     final PrintStream outputStream;
@@ -64,6 +62,11 @@ public class RustFileWriter {
         }
 
         @Override
+        public void postorder(DBSPTypeStruct type) {
+            RustFileWriter.this.used.tupleSizesUsed.add(type.fields.size());
+        }
+
+        @Override
         public void postorder(DBSPTypeSemigroup type) {
             RustFileWriter.this.used.semigroupSizesUsed.add(type.semigroupSize());
         }
@@ -94,14 +97,12 @@ public class RustFileWriter {
      */
     @SuppressWarnings("SpellCheckingInspection")
     static final String rustPreamble = """
-                    use paste::paste;
-                    use derive_more::{Add,Sub,Neg,From,Into,AddAssign};
                     use dbsp::{
                         algebra::{ZSet, MulByRef, F32, F64, Semigroup, SemigroupValue, ZRingValue,
                              UnimplementedSemigroup, DefaultSemigroup, HasZero, AddByRef, NegByRef,
                              AddAssignByRef,
                         },
-                        circuit::{Circuit, CircuitConfig, Stream},
+                        circuit::{checkpointer::Checkpoint, Circuit, CircuitConfig, Stream},
                         operator::{
                             Generator,
                             FilterMap,
@@ -119,11 +120,11 @@ public class RustFileWriter {
                         DBWeight,
                         DBData,
                         DBSPHandle,
-                        Error as DBSPError,
+                        Error,
                         Runtime,
                         NumEntries,
                         MapHandle, ZSetHandle, OutputHandle,
-                        dynamic::DynData,
+                        dynamic::{DynData,DynDataTyped},
                     };
                     use dbsp_adapters::Catalog;
                     use pipeline_types::{deserialize_table_record, serialize_table_record};
@@ -131,18 +132,17 @@ public class RustFileWriter {
                     use ::serde::{Deserialize,Serialize};
                     use compare::{Compare, Extract};
                     use std::{
+                        collections::BTreeMap,
                         convert::identity,
-                        ops::{Add, Neg, AddAssign},
+                        ops::Neg,
                         fmt::{Debug, Formatter, Result as FmtResult},
-                        cell::RefCell,
                         path::Path,
-                        rc::Rc,
                         marker::PhantomData,
-                        str::FromStr,
                     };
                     use core::cmp::Ordering;
                     use rust_decimal::Decimal;
                     use dbsp::declare_tuples;
+                    use json::*;
                     use sqllib::{
                         *,
                         array::*,
@@ -160,6 +160,14 @@ public class RustFileWriter {
                     use readers::*;
                     #[cfg(test)]
                     use sqlx::{AnyConnection, any::AnyRow, Row};
+
+                    #[cfg(not(target_env = "msvc"))]
+                    #[global_allocator]
+                    static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+                    #[allow(non_upper_case_globals)]
+                    #[export_name = "malloc_conf"]
+                    pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\\0";
                     """;
 
 
@@ -351,7 +359,6 @@ public class RustFileWriter {
         FindResources findResources = new FindResources(compiler);
         CircuitRewriter findCircuitResources = findResources.getCircuitVisitor();
         LowerCircuitVisitor lower = new LowerCircuitVisitor(compiler);
-        SanitizeNames sanitizer = new SanitizeNames(compiler);
 
         for (IDBSPNode node: this.toWrite) {
             IDBSPInnerNode inner = node.as(IDBSPInnerNode.class);
@@ -364,8 +371,6 @@ public class RustFileWriter {
                 outer = lower.apply(outer);
                 // Beta reduction is beneficial after implementing aggregates.
                 outer = reducer.apply(outer);
-                // Sanitize structure names
-                outer = sanitizer.apply(outer);
                 // Find the resources used to generate the correct Rust preamble
                 outer = findCircuitResources.apply(outer);
                 lowered.add(outer);
@@ -377,7 +382,7 @@ public class RustFileWriter {
             String str;
             IDBSPInnerNode inner = node.as(IDBSPInnerNode.class);
             if (inner != null) {
-                str = ToRustInnerVisitor.toRustString(compiler, inner, false);
+                str = ToRustInnerVisitor.toRustString(compiler, inner, compiler.options, false);
             } else {
                 DBSPCircuit outer = node.to(DBSPCircuit.class);
                 str = ToRustVisitor.toRustString(compiler, outer, compiler.options);

@@ -2,7 +2,7 @@
 
 set -o pipefail
 
-runner=dbsp
+runner=feldera
 mode=stream
 events=100k
 language=default
@@ -13,6 +13,11 @@ if ! cores=$(nproc 2>/dev/null) || test $cores -gt 16; then
 fi
 run=:
 parse=false
+
+# Feldera SQL options.
+kafka_broker=localhost:9092
+kafka_from_feldera=
+api_url=http://localhost:8080
 
 # Dataflow options.
 project=
@@ -84,6 +89,24 @@ do
 	    parse=:
 	    run=false
 	    ;;
+	--kafka-broker=*)
+	    kafka_broker=${arg#--kafka-broker=}
+	    ;;
+	--kafka-broker)
+	    nextarg=kafka_broker
+	    ;;
+	--kafka-from-feldera=*)
+	    kafka_from_feldera=${arg#--kafka-from-feldera=}
+	    ;;
+	--kafka-from-feldera)
+	    nextarg=kafka_from_feldera
+	    ;;
+	--api-url=*)
+	    api_url=${arg#--api-url=}
+	    ;;
+	--api-url)
+	    nextarg=api_url
+	    ;;
 	--project=*)
 	    project=${arg#--project=}
 	    ;;
@@ -114,7 +137,7 @@ run-nexmark, for running the Nexmark benchmark with various backends
 Usage: $0 [OPTIONS]
 
 The following options are supported:
-  -r, --runner=RUNNER   Use back end RUNNER, one of: dbsp flink beam.direct
+  -r, --runner=RUNNER   Use back end RUNNER, one of: feldera flink beam.direct
                         beam.flink beam.spark beam.dataflow
   -s, --stream          Run stream analytics (default)
   -b, --batch           Run batch analytics
@@ -128,6 +151,12 @@ By default, run-nexmark runs the tests and appends parsed results to
 nexmark.txt.  These options select other modes of operation:
   -n, --dry-run         Don't run anything, just print what would have run
   --parse < LOG         Parse log output from stdin, print results to stdout.
+
+The feldera backend with --language=sql takes the following additional options:
+  --kafka-broker=BROKER  Kafka broker (default: $kafka_broker)
+  --kafka-from-feldera=BROKER  Kafka broker as accessed from Feldera (defaults
+                               to the same as --kafka-broker)
+  --api-url=URL         URL to the Feldera API (default: $api_url)
 
 The beam.dataflow backend takes more configuration.  These settings are
 required:
@@ -153,7 +182,8 @@ if test -n "$nextarg"; then
 fi
 
 case $runner in
-    dbsp | flink | beam.direct | beam.flink | beam.spark) ;;
+    dbsp) runner=feldera ;;
+    feldera | flink | beam.direct | beam.flink | beam.spark) ;;
     beam.dataflow)
 	if ! $parse; then
 	    if test -z "$project"; then
@@ -174,8 +204,9 @@ case $runner in
     *) echo >&2 "$0: unknown runner '$runner'"; exit 1 ;;
 esac
 case $runner:$language in
-    *:default | beam.*:sql | beam.*:zetasql) ;;
-    *:sql | *:zetasql) echo >&2 "$0: only beam.* support $language" ;;
+    *:default | feldera:sql | beam.*:sql | beam.*:zetasql) ;;
+    *:sql) echo >&2 "$0: only beam.* and feldera support $language" ;;
+    *:zetasql) echo >&2 "$0: only beam.* support $language" ;;
     *) echo >&2 "$0: unknown query language '$language'"; exit 1 ;;
 esac
 case $events in
@@ -186,6 +217,10 @@ case $events in
 	echo >&2 "$0: --events must be a number with optional k, M, or G suffix"
 	exit 1
 	;;
+esac
+case $query in
+    all | [0-9] | [0-9][0-9]) ;;
+    *) echo >&2 "$0: --query must be 'all' or a number"; exit 1 ;;
 esac
 case $mode in
     stream | streaming) mode=stream streaming=true ;;
@@ -297,14 +332,17 @@ beam2csv() {
     done | sort | uniq
 }
 
-dbsp2csv() {
-    sed 's/[ 	]//g' | while read line; do
+feldera2csv() {
+    sed 's/[ 	]//g' | tr Q q | while read line; do
 	case $line in
+	    *,feldera,stream,sql,*)
+		echo "$line"
+		;;
 	    *'│'*)
 		save_IFS=$IFS IFS=│; set $line; IFS=$save_IFS
 		shift
 		case $1:$2 in
-		    q*:*,*) ;;
+		    [qQ]*:*,*) ;;
 		    *) continue ;;
 		esac
 		query=$1 events=$(echo "$2" | sed 's/,//g') cores=$3
@@ -368,7 +406,7 @@ csv_heading=when,runner,mode,language,name,num_cores,num_events,elapsed
 parse() {
     csv_common=$when,$runner,$mode,$language
     case $runner in
-	dbsp) dbsp2csv ;;
+	feldera) feldera2csv ;;
 	flink) flink2csv ;;
 	beam.*) beam2csv ;;
 	*) echo >&2 "unknown runner $runner"; exit 1 ;;
@@ -388,8 +426,11 @@ Running Nexmark suite with configuration:
   query: $query
   cores: $cores
 EOF
-case $runner in
-    dbsp)
+case $runner:$language in
+    feldera:default)
+	if stat -f ${TMPDIR:-/tmp} 2>&1 | grep -q 'Type: tmpfs'; then
+	    echo >&2 "$0: warning: temporary files will be stored on tmpfs in ${TMPDIR:-/tmp}, suggest setting \$TMPDIR to point to a physical file system"
+	fi
 	rm -f results.csv
 	set -- \
 	    --first-event-rate=10000000 \
@@ -406,33 +447,66 @@ case $runner in
 	run_log $CARGO bench --bench nexmark -- "$@"
 	;;
 
-    flink)
+    feldera:sql)
+	RPK=$(find_program rpk)
+	CARGO=$(find_program cargo)
+	topics="auction-$events bid-$events person-$events"
+	echo >&2 "$0: checking for already generated events in '$topics'..."
+	count_events() {
+	    for topic in $topics; do
+		$RPK -X brokers="$kafka_broker" topic consume -f '%v' -o :end $topic
+	    done | wc -l
+	}
+	n_events=$(count_events)
+	if test "$n_events" != $events; then
+	    echo >&2 "$0: topics '$topics' contained $n_events events instead of $events.  Recreating..."
+	    run_log $RPK topic -X brokers=$kafka_broker delete $topics
+	    run_log $CARGO run -p dbsp_nexmark --example generate --features with-kafka -- --max-events $events --topic-suffix=-$events -O bootstrap.servers=$kafka_broker || exit 1
+
+	    n_events=$(count_events)
+	    if test "$n_events" != $events; then
+		echo >&2 "$0: generation failed: topics '$topics' now contain $n_events events instead of $events."
+		exit 1
+	    fi
+	fi
+	rm -f results.csv
+	CARGO=$(find_program cargo)
+	run_log feldera-sql/run.py \
+	    --api-url="$api_url" \
+	    -O bootstrap.servers="${kafka_from_feldera:-${kafka_broker}}" \
+	    --cores $cores \
+	    --input-topic-suffix "-$events" \
+	    --csv results.csv \
+	    --query $query
+	;;
+
+    flink:*)
 	# XXX --stream
 	# Each Flink replica has two cores.
 	replicas=$(expr \( $cores + 1 \) / 2)
 	yml=flink/docker-compose-${cores}core.yml
-	sed "s/replicas: .*/replicas: $replicas/" < flink/docker-compose.yml > $yml
+	sed "# Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
+s/replicas: .*/replicas: $replicas/" < flink/docker-compose.yml > $yml
 
 	# Query names need 'q' prefix
 	if test "$query" != all; then
 	    query=q$query
 	fi
 
-	DOCKER=$(find_program podman docker)
-	DOCKER_COMPOSE=$(find_program podman-compose docker-compose)
-	run $DOCKER_COMPOSE -p nexmark -f $yml down -t 0
-	run $DOCKER_COMPOSE -p nexmark -f $yml up -d || exit 1
-	run_log $DOCKER exec nexmark_jobmanager_1 run.sh --queries "$query" --events $events || exit 1
-	run $DOCKER_COMPOSE -p nexmark -f $yml down -t 0 || exit 1
+	DOCKER=$(find_program docker podman)
+	run $DOCKER compose -p nexmark -f $yml down -t 0
+	run $DOCKER compose -p nexmark -f $yml up -d --build --force-recreate --renew-anon-volumes || exit 1
+	run_log $DOCKER exec nexmark-jobmanager-1 run.sh --queries "$query" --events $events || exit 1
+	run $DOCKER compose -p nexmark -f $yml down -t 0 || exit 1
 	;;
 
-    beam.direct)
+    beam.direct:*)
 	run_beam_nexmark direct-java \
 		    --runner=DirectRunner \
 		    --targetParallelism=$cores
 	;;
 
-    beam.flink)
+    beam.flink:*)
 	# Flink tends to peak at about 2*parallelism cores according to 'top'.
 	parallelism=$(expr \( $cores + 1 \) / 2)
 	run_beam_nexmark flink:1.13 \
@@ -442,7 +516,7 @@ case $runner in
 		    --maxParallelism=$parallelism
 	;;
 
-    beam.spark)
+    beam.spark:*)
 	if test $streaming = true; then
 	    echo >&2 "$0: warning: $runner hangs in streaming mode"
 	fi
@@ -451,7 +525,7 @@ case $runner in
 		    --sparkMaster="local[$cores]"
 	;;
 
-    beam.dataflow)
+    beam.dataflow:*)
 	region=us-west1
 	cores_per_worker=4	# For the default Dataflow worker machine type
 	n_workers=$(expr $cores / $cores_per_worker)

@@ -24,12 +24,14 @@
 // This could benefit from procedural macros to auto-derive
 // [`SerializeWithContext`].
 
+use crate::serde_with_context::serde_config::DecimalFormat;
+use crate::serde_with_context::SqlSerdeConfig;
 use rust_decimal::Decimal;
 use serde::{
-    ser::{SerializeSeq, SerializeTuple},
+    ser::{SerializeMap, SerializeSeq, SerializeTuple},
     Serialize, Serializer,
 };
-use std::marker::PhantomData;
+use std::{collections::BTreeMap, marker::PhantomData};
 
 /// Similar to [`Serialize`], but takes an extra `context` argument and
 /// threads it through all nested structures.
@@ -37,6 +39,29 @@ pub trait SerializeWithContext<C>: Sized + Serialize {
     fn serialize_with_context<S>(&self, serializer: S, context: &C) -> Result<S::Ok, S::Error>
     where
         S: Serializer;
+}
+
+pub struct SerializeWithContextWrapper<'a, C, T> {
+    val: &'a T,
+    context: &'a C,
+}
+
+impl<'a, C, T> SerializeWithContextWrapper<'a, C, T> {
+    pub fn new(val: &'a T, context: &'a C) -> Self {
+        Self { val, context }
+    }
+}
+
+impl<'a, C, T> Serialize for SerializeWithContextWrapper<'a, C, T>
+where
+    T: SerializeWithContext<C>,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.val.serialize_with_context(serializer, self.context)
+    }
 }
 
 /// Implement [`SerializeWithContext`] for types that implement
@@ -80,10 +105,25 @@ serialize_without_context!(usize);
 serialize_without_context!(isize);
 serialize_without_context!(String);
 serialize_without_context!(char);
-serialize_without_context!(Decimal);
+
+impl SerializeWithContext<SqlSerdeConfig> for Decimal {
+    fn serialize_with_context<S>(
+        &self,
+        serializer: S,
+        context: &SqlSerdeConfig,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match context.decimal_format {
+            DecimalFormat::String => Serialize::serialize(self, serializer),
+            DecimalFormat::U128 => serializer.serialize_u128(u128::from_be_bytes(self.serialize())),
+        }
+    }
+}
 
 /// Used to pass the context to nested structures during serialization.
-// This is only public because it's used in a macro; it's not suppposed
+// This is only public because it's used in a macro; it's not supposed
 // to be user-visible otherwise.
 #[doc(hidden)]
 pub struct SerializationContext<'se, C, T> {
@@ -128,6 +168,26 @@ where
         }
 
         seq.end()
+    }
+}
+
+impl<C, K, V> SerializeWithContext<C> for BTreeMap<K, V>
+where
+    K: SerializeWithContext<C> + Ord,
+    V: SerializeWithContext<C>,
+{
+    fn serialize_with_context<S>(&self, serializer: S, context: &C) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.len()))?;
+        for (k, v) in self {
+            map.serialize_entry(
+                &SerializationContext::new(context, k),
+                &SerializationContext::new(context, v),
+            )?;
+        }
+        map.end()
     }
 }
 
@@ -324,8 +384,6 @@ macro_rules! serialize_table_record {
 #[cfg(test)]
 mod test {
     use lazy_static::lazy_static;
-    use rust_decimal::Decimal;
-    use rust_decimal_macros::dec;
     use serde::{Deserialize, Serialize};
 
     use crate::serde_with_context::{SerializationContext, SerializeWithContext, SqlSerdeConfig};
@@ -362,13 +420,10 @@ mod test {
         cc_num: u64,
         #[allow(non_snake_case)]
         first: Option<String>,
-        #[allow(non_snake_case)]
-        dec: Decimal,
     }
     serialize_struct!(Struct2()[3] {
         cc_num["cc_num"]: u64,
-        first["FIRST"]: Option<String>,
-        dec["DEC"]: Decimal
+        first["FIRST"]: Option<String>
     });
 
     #[test]
@@ -377,30 +432,27 @@ mod test {
             serialize_json_with_default_context(&Struct2 {
                 cc_num: 100,
                 first: None,
-                dec: dec!(0.123),
             })
             .unwrap(),
-            r#"{"cc_num":100,"FIRST":null,"DEC":"0.123"}"#
+            r#"{"cc_num":100,"FIRST":null}"#
         );
 
         assert_eq!(
             serialize_json_with_default_context(&Struct2 {
                 cc_num: 100,
                 first: None,
-                dec: dec!(-1.40),
             })
             .unwrap(),
-            r#"{"cc_num":100,"FIRST":null,"DEC":"-1.40"}"#
+            r#"{"cc_num":100,"FIRST":null}"#
         );
 
         assert_eq!(
             serialize_json_with_default_context(&Struct2 {
                 cc_num: 100,
                 first: Some("foo".to_string()),
-                dec: dec!(1e20),
             })
             .unwrap(),
-            r#"{"cc_num":100,"FIRST":"foo","DEC":"100000000000000000000"}"#
+            r#"{"cc_num":100,"FIRST":"foo"}"#
         );
     }
 

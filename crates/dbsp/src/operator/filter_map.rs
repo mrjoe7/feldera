@@ -1,9 +1,9 @@
-use crate::typed_batch::DynFileZSet;
 use crate::{
     dynamic::{DataTrait, Erase, WeightTrait},
     trace::BatchReaderFactories,
     typed_batch::{
-        Batch, BatchReader, DynOrdIndexedWSet, DynOrdWSet, OrdIndexedWSet, OrdWSet, TypedBatch,
+        Batch, BatchReader, DynOrdIndexedWSet, DynOrdWSet, DynVecIndexedWSet, DynVecWSet,
+        OrdIndexedWSet, OrdWSet, TypedBatch,
     },
     Circuit, DBData, DBWeight, Stream,
 };
@@ -115,7 +115,7 @@ impl<C: Circuit, B: FilterMap> Stream<C, B> {
     /// records into `OrdZSet` batches.
     ///
     /// The output of `func` can be any type that implements `trait
-    /// IntoIterator`, e.g., `Option<>` or `Vec<>`.
+    /// IntoIterator`, e.g., `Option<>` or `Vecxxxxv<>`.
     pub fn flat_map<F, I>(&self, mut func: F) -> Stream<C, OrdWSet<I::Item, B::R, B::DynR>>
     where
         F: FnMut(B::ItemRef<'_>) -> I + 'static,
@@ -293,7 +293,7 @@ where
     }
 }
 
-impl<K, DynK, R, DynR> FilterMap for TypedBatch<K, (), R, DynFileZSet<DynK, DynR>>
+impl<K, DynK, R, DynR> FilterMap for TypedBatch<K, (), R, DynVecWSet<DynK, DynR>>
 where
     K: DBData + Erase<DynK>,
     DynK: DataTrait + ?Sized,
@@ -352,6 +352,78 @@ where
                 &factories,
                 Box::new(move |item: &Self::DynK, cb| {
                     for (mut k, mut v) in unsafe { func(item.downcast()) } {
+                        cb(k.erase_mut(), v.erase_mut());
+                    }
+                }),
+            )
+            .typed()
+    }
+}
+
+impl<K, DynK, V, DynV, R, DynR> FilterMap
+    for TypedBatch<K, V, R, DynVecIndexedWSet<DynK, DynV, DynR>>
+where
+    K: DBData + Erase<DynK>,
+    DynK: DataTrait + ?Sized,
+    V: DBData + Erase<DynV>,
+    DynV: DataTrait + ?Sized,
+    R: DBWeight + Erase<DynR>,
+    DynR: WeightTrait + ?Sized,
+{
+    type ItemRef<'a> = (&'a K, &'a V);
+
+    fn filter<C: Circuit, F>(stream: &Stream<C, Self>, filter_func: F) -> Stream<C, Self>
+    where
+        F: Fn(Self::ItemRef<'_>) -> bool + 'static,
+    {
+        stream
+            .inner()
+            .dyn_filter(Box::new(move |(k, v)| unsafe {
+                filter_func((k.downcast(), v.downcast()))
+            }))
+            .typed()
+    }
+
+    fn map_generic<C: Circuit, F, KT, VT, O>(stream: &Stream<C, Self>, map_func: F) -> Stream<C, O>
+    where
+        KT: DBData + Erase<O::DynK>,
+        VT: DBData + Erase<O::DynV>,
+        F: Fn(Self::ItemRef<'_>) -> (KT, VT) + 'static,
+        O: Batch<Key = KT, Val = VT, Time = (), R = R, DynR = DynR>,
+    {
+        let factories = BatchReaderFactories::new::<KT, VT, R>();
+
+        stream
+            .inner()
+            .dyn_map_generic(
+                &factories,
+                Box::new(move |(k, v), pair| {
+                    let (mut key, mut val) = unsafe { map_func((k.downcast(), v.downcast())) };
+                    pair.from_vals(key.erase_mut(), val.erase_mut());
+                }),
+            )
+            .typed()
+    }
+
+    fn flat_map_generic<C: Circuit, F, KT, VT, I, O>(
+        stream: &Stream<C, Self>,
+        mut func: F,
+    ) -> Stream<C, O>
+    where
+        KT: DBData + Erase<O::DynK>,
+        VT: DBData + Erase<O::DynV>,
+        F: FnMut(Self::ItemRef<'_>) -> I + 'static,
+        I: IntoIterator<Item = (KT, VT)> + 'static,
+        O: Batch<Key = KT, Val = VT, Time = (), R = R, DynR = DynR>,
+    {
+        let factories = BatchReaderFactories::new::<KT, VT, R>();
+
+        stream
+            .inner()
+            .dyn_flat_map_generic(
+                &factories,
+                Box::new(move |(k, v), cb| {
+                    for (mut k, mut v) in unsafe { func((k.downcast(), v.downcast())) } {
                         cb(k.erase_mut(), v.erase_mut());
                     }
                 }),

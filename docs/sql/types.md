@@ -1,4 +1,4 @@
-# Supported Data Types
+# Built-in Data Types
 
 The compiler supports the following SQL data types:
 
@@ -7,7 +7,7 @@ The compiler supports the following SQL data types:
 | `BOOLEAN`                   | A boolean value                                                                                                                                                    | `BOOL`                     |
 | `TINYINT`                   | 8-bit signed integer using two's complement.                                                                                                                       |                            |
 | `SMALLINT`                  | 16-bit signed integer using two's complement.                                                                                                                      | `INT2`                     |
-| `INTEGER`                   | 32-bit signed integer using two's complement.                                                                                                                      | `INT`, `SIGNED`, `INT4`    | 
+| `INTEGER`                   | 32-bit signed integer using two's complement.                                                                                                                      | `INT`, `SIGNED`, `INT4`    |
 | `BIGINT`                    | 64-bit signed integer using two's complement.                                                                                                                      | `INT8`, `INT64`            |
 | `DECIMAL(precision, scale)` | A high precision fixed-point type, with a precision (total number of decimal digits) and a scale (number of decimal digits after period).                          | `DEC`, `NUMERIC`, `NUMBER` |
 | `REAL`                      | IEEE 32-bit floating point number                                                                                                                                  | `FLOAT4`, `FLOAT32`        |
@@ -24,6 +24,7 @@ The compiler supports the following SQL data types:
 | `DATE`                      | A date value.                                                                                                                                                      |                            |
 | `GEOMETRY`                  | A geographic data type (only rudimentary support at this point).                                                                                                   |                            |
 | `ARRAY`                     | An array with element of the specified type. Used as a suffix for another type (e.g., `INT ARRAY`)                                                                 |                            |
+| `MAP`                       | A map with keys and values of specified types. The syntax is `MAP<KEYTYPE, VALUETYPE>`                                                                             |                            |
 
 - For `DECIMAL` types: 23.456 has a precision of 5 and a scale of 3.
   If scale is missing it is assumed to be 0.
@@ -37,8 +38,8 @@ The compiler supports the following SQL data types:
   the `FLOAT` type, so we have decided to prohibit its use to avoid
   subtle bugs.
 
-- `INTERAL` or `NULL` types are not supported in table schemas as field types. They
-  are only used in expressions.
+- `INTERVAL` and `NULL` types are not supported in table schemas as
+  field types. They are only used in expressions.
 
 ## Computations on nullable types
 
@@ -52,6 +53,52 @@ follows the SQL standard in this respect. Most operations (e.g.,
 `+`), when applied a `NULL` operand will produce a `NULL`
 value.
 
+## User-defined structures
+
+Users can declare new structure types.  Such types can be used for
+columns, record fields, user-defined function parameters or results.
+
+For example, we can declare types `address_typ` and `employee_typ`:
+
+```sql
+CREATE TYPE address_typ AS (
+   street          VARCHAR(30),
+   city            VARCHAR(20),
+   state           CHAR(2),
+   postal_code     VARCHAR(6));
+
+CREATE TYPE employee_typ AS (
+  employee_id       DECIMAL(6),
+  first_name        VARCHAR(20),
+  last_name         VARCHAR(25),
+  email             VARCHAR(25),
+  phone_number      VARCHAR(20),
+  hire_date         DATE,
+  job_id            VARCHAR(10),
+  salary            DECIMAL(8,2),
+  commission_pct    DECIMAL(2,2),
+  manager_id        DECIMAL(6),
+  department_id     DECIMAL(4),
+  address           address_typ);
+```
+
+An expression that constructs a structure uses the type name, e.g.:
+
+```sql
+employee_typ(315, 'Francis', 'Logan', 'FLOGAN',
+    '555.777.2222', DATE '2004-05-01', 'SA_MAN', 11000, .15, 101, 110,
+     address_typ('376 Mission', 'San Francisco', 'CA', '94222'))
+```
+
+Tables can have structure-valued columns, but these have to be fully
+qualified using both the table name and the column name in programs:
+
+```sql
+CREATE TABLE PERS(p0 employee_typ, p1 employee_typ);
+CREATE VIEW V AS SELECT PERS.p0.address FROM PERS
+WHERE PERS.p0.first_name = 'Mike'
+```
+
 ## Grammar for specifying types
 
 ```
@@ -62,6 +109,7 @@ type:
 typeName:
       sqlTypeName
   |   compoundIdentifier
+  |   MAP < type , type >
 
 sqlTypeName:
       char [ precision ] [ charSet ]

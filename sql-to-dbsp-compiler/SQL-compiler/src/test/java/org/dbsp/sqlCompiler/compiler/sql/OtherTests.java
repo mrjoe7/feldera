@@ -31,18 +31,24 @@ import org.apache.calcite.jdbc.CalciteConnection;
 import org.apache.calcite.schema.SchemaPlus;
 import org.dbsp.sqlCompiler.CompilerMain;
 import org.dbsp.sqlCompiler.circuit.DBSPCircuit;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPControlledFilterOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPMapOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPSinkOperator;
 import org.dbsp.sqlCompiler.circuit.operator.DBSPStreamDistinctOperator;
 import org.dbsp.sqlCompiler.compiler.CompilerOptions;
 import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
+import org.dbsp.sqlCompiler.compiler.StderrErrorReporter;
 import org.dbsp.sqlCompiler.compiler.TestUtil;
 import org.dbsp.sqlCompiler.compiler.backend.ToCsvVisitor;
 import org.dbsp.sqlCompiler.compiler.backend.rust.RustFileWriter;
 import org.dbsp.sqlCompiler.compiler.errors.CompilerMessages;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.CalciteCompiler;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.sql.simple.Change;
 import org.dbsp.sqlCompiler.compiler.sql.simple.EndToEndTests;
+import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
+import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.Passes;
 import org.dbsp.sqlCompiler.ir.DBSPFunction;
 import org.dbsp.sqlCompiler.ir.DBSPNode;
@@ -61,8 +67,8 @@ import org.dbsp.sqlCompiler.ir.expression.literal.DBSPZSetLiteral;
 import org.dbsp.sqlCompiler.ir.statement.DBSPLetStatement;
 import org.dbsp.sqlCompiler.ir.statement.DBSPStatement;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeUser;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeUser;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeInteger;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeString;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeVoid;
@@ -79,9 +85,10 @@ import org.junit.Test;
 
 import javax.imageio.ImageIO;
 import javax.sql.DataSource;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FilenameFilter;
 import java.io.FileWriter;
+import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
@@ -123,27 +130,87 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
 
         NameGen.reset();
         DBSPNode.reset();
+        DBSPVariablePath.reset();
         String query = "CREATE VIEW V AS SELECT T.COL3 FROM T";
         DBSPCompiler compiler = this.compileDef();
         compiler.compileStatement(query);
-        compiler.optimize();
         // Deterministically name the circuit function.
         DBSPCircuit circuit = compiler.getFinalCircuit("circuit");
         String str = circuit.toString();
-        String expected = """
+        String expected;
+        expected = """
                 Circuit circuit {
-                    // DBSPSourceMultisetOperator 53
+                    // DBSPSourceMultisetOperator 39
                     // CREATE TABLE `T` (`COL1` INTEGER NOT NULL, `COL2` DOUBLE NOT NULL, `COL3` BOOLEAN NOT NULL, `COL4` VARCHAR NOT NULL, `COL5` INTEGER, `COL6` DOUBLE)
-                    let stream53 = T();
-                    // DBSPMapOperator 75
-                    let stream75: stream<WSet<Tup1<b>>> = stream53.map((|t: &Tup6<i32, d, b, s, i32?, d?>| Tup1::new(((*t).2), )));
+                    let stream39 = T();
+                    // DBSPMapOperator 61
+                    let stream61: stream<WSet<Tup1<b>>> = stream39.map((|t_1: &Tup6<i32, d, b, s, i32?, d?>| Tup1::new(((*t_1).2), )));
                     // CREATE VIEW `V` AS
                     // SELECT `T`.`COL3`
                     // FROM `T`
-                    let stream82: stream<WSet<Tup1<b>>> = stream75;
+                    let stream130: stream<WSet<Tup1<b>>> = stream61;
                 }
                 """;
         Assert.assertEquals(expected, str);
+    }
+
+    @Test
+    public void connectorPropertiesTest() {
+        String ddl = """
+               CREATE TABLE T (
+                  COL1 INT
+               ) WITH (
+                  'connector' = 'kafka',
+                  'url' = 'localhost'
+               );
+               CREATE VIEW V WITH (
+                  'connector' = 'file',
+                  'path' = '/tmp/x'
+               ) AS SELECT * FROM T;""";
+        DBSPCompiler compiler = this.testCompiler();
+        compiler.compileStatements(ddl);
+        getCircuit(compiler);
+        JsonNode meta = compiler.getIOMetadataAsJson();
+        JsonNode inputs = meta.get("inputs");
+        Assert.assertNotNull(inputs);
+        Assert.assertTrue(inputs.isArray());
+        JsonNode c = inputs.get(0).get("properties");
+        Assert.assertNotNull(c);
+        String str = c.toPrettyString();
+        Assert.assertEquals("""
+               {
+                 "connector" : "kafka",
+                 "url" : "localhost"
+               }""", str);
+
+        JsonNode outputs = meta.get("outputs");
+        Assert.assertNotNull(inputs);
+        Assert.assertTrue(outputs.isArray());
+        c = outputs.get(0).get("properties");
+        Assert.assertNotNull(c);
+        str = c.toPrettyString();
+        Assert.assertEquals("""
+               {
+                 "connector" : "file",
+                 "path" : "/tmp/x"
+               }""", str);
+    }
+
+    @Test
+    public void illegalConnectorPropertiesTest() {
+        String ddl = """
+               CREATE TABLE T (
+                  COL1 INT
+               ) WITH (
+                  'connector' = 'kafka',
+                  'connector' = 'localhost'
+               );
+               CREATE VIEW V AS SELECT * FROM T;""";
+        DBSPCompiler compiler = this.testCompiler();
+        compiler.options.languageOptions.throwOnError = false;
+        compiler.compileStatements(ddl);
+        TestUtil.assertMessagesContain(compiler, "Duplicate key");
+        TestUtil.assertMessagesContain(compiler, "Previous declaration");
     }
 
     @Test
@@ -153,7 +220,7 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
         String query = "CREATE VIEW V AS SELECT '1_000'::INT4";
         compiler.compileStatement(query);
         getCircuit(compiler);  // invokes optimizer
-        TestUtil.assertMessagesContain(compiler.messages, "String '1_000' cannot be interpreted as a number");
+        TestUtil.assertMessagesContain(compiler, "String '1_000' cannot be interpreted as a number");
     }
 
     // Test the ability to redirect logging streams.
@@ -423,24 +490,24 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
     public void testWith() throws IOException, InterruptedException, SQLException {
         String statement =
                 """
-                        create table VENDOR (
-                            id bigint not null primary key,
-                            name varchar,
-                            address varchar
-                        );
+                create table VENDOR (
+                    id bigint not null primary key,
+                    name varchar,
+                    address varchar
+                );
+                create table PART (
+                    id bigint not null primary key,
+                    name varchar
+                );
+                create table PRICE (
+                    part bigint not null,
+                    vendor bigint not null,
+                    price decimal
+                );
 
-                        create table PART (
-                            id bigint not null primary key,
-                            name varchar
-                        );
-
-                        create table PRICE (
-                            part bigint not null,
-                            vendor bigint not null,
-                            price decimal
-                        );
-
-                        create view LOW_PRICE AS with LOW_PRICE_CTE AS (  select part, MIN(price) as price from PRICE group by part) select * FROM LOW_PRICE_CTE""";
+                create view LOW_PRICE AS
+                WITH LOW_PRICE_CTE AS (  select part, MIN(price) as price from PRICE group by part)
+                SELECT * FROM LOW_PRICE_CTE""";
         File file = createInputScript(statement);
         CompilerMessages messages = CompilerMain.execute("-o", BaseSQLTests.testFilePath, file.getPath());
         if (messages.errorCount() > 0)
@@ -497,7 +564,46 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
     }
 
     @Test
-    public void testIOT() throws IOException, InterruptedException, SQLException {
+    public void testProjectionSimplify() {
+        // Test for https://github.com/feldera/feldera/issues/1628
+        String sql = EndToEndTests.E2E_TABLE + "; " +
+                "CREATE VIEW V AS SELECT T1.COL3 FROM T AS T1 JOIN T AS T2 ON T1.COL2 = T2.COL6";
+        DBSPCompiler compiler = this.testCompiler();
+        // Without optimizations there is a map operator.
+        compiler.options.languageOptions.optimizationLevel = 1;
+        compiler.compileStatements(sql);
+        DBSPCircuit circuit = getCircuit(compiler);
+        CircuitVisitor findMap = new CircuitVisitor(compiler) {
+            int mapCount = 0;
+
+            @Override
+            public VisitDecision preorder(DBSPMapOperator node) {
+                this.mapCount++;
+                return super.preorder(node);
+            }
+
+            @Override
+            public void endVisit() {
+                Assert.assertTrue(this.mapCount > 0);
+            }
+        };
+        findMap.apply(circuit);
+
+        compiler = this.testCompiler();
+        compiler.compileStatements(sql);
+        circuit = getCircuit(compiler);
+        CircuitVisitor noMap = new CircuitVisitor(compiler) {
+            @Override
+            public VisitDecision preorder(DBSPMapOperator node) {
+                Assert.fail("Circuit should contain no map operators");
+                return super.preorder(node);
+            }
+        };
+        noMap.apply(circuit);
+    }
+
+    @Test
+    public void testIOT() throws IOException {
         // Iot code from different repository checked out in a specific place
         final String iotSql = "../../../iot/iot.sql";
         File sql = new File(iotSql);
@@ -506,9 +612,43 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
         String script = Utilities.readFile(sql.toPath());
         DBSPCompiler compiler = this.testCompiler();
         compiler.options.languageOptions.throwOnError = true;
+        compiler.options.ioOptions.emitHandles = false;
+        // compiler.options.languageOptions.incrementalize = true;
         compiler.compileStatements(script);
         CompilerCircuitStream ccs = new CompilerCircuitStream(compiler);
         this.addRustTestCase("testIOT", ccs);
+    }
+
+    @Test
+    public void testViewLateness() {
+        String query = """
+                LATENESS V.COL1 INTERVAL 1 HOUR;
+                -- no view called W
+                LATENESS W.COL2 INTERVAL 1 HOUR;
+                CREATE VIEW V AS SELECT T.COL1, T.COL2 FROM T;
+                CREATE VIEW V1 AS SELECT * FROM V;
+                """;
+        DBSPCompiler compiler = this.testCompiler();
+        compiler.options.ioOptions.quiet = false;  // show warnings
+        compiler.compileStatement(ddl);
+        compiler.compileStatements(query);
+        DBSPCircuit circuit = getCircuit(compiler);
+        CircuitVisitor visitor = new CircuitVisitor(new StderrErrorReporter()) {
+            boolean found = false;
+
+            @Override
+            public VisitDecision preorder(DBSPControlledFilterOperator filter) {
+                found = true;
+                return VisitDecision.CONTINUE;
+            }
+
+            @Override
+            public void endVisit() {
+                Assert.assertTrue(this.found);
+            }
+        };
+        visitor.apply(circuit);
+        TestUtil.assertMessagesContain(compiler, "No view named 'W' found");
     }
 
     @Test
@@ -562,14 +702,33 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
         String query = "CREATE VIEW V AS SELECT T.COL1 FROM T";
         compiler.compileStatement(ddl);
         compiler.compileStatements(query);
-        compiler.optimize();
         DBSPCircuit circuit = compiler.getFinalCircuit("circuit");
-        DBSPOperator sink = circuit.circuit.getOutput("V");
+        DBSPSinkOperator sink = circuit.circuit.getSink("V");
         Assert.assertNotNull(sink);
-        Assert.assertEquals(1, sink.inputs.size());
-        DBSPOperator op = sink.inputs.get(0);
+        DBSPOperator op = sink.input();
         // There is no optimization I can imagine which will remove the distinct
         Assert.assertTrue(op.is(DBSPStreamDistinctOperator.class));
+    }
+
+    @Test
+    public void testNoOutput() throws IOException, SQLException {
+        String[] statements = new String[]{
+                "CREATE TABLE T (\n" +
+                        "COL1 INT NOT NULL" +
+                        ", COL2 DOUBLE NOT NULL" +
+                        ")",
+                "CREATE VIEW V AS SELECT COL1 FROM T"
+        };
+        File file = createInputScript(statements);
+        // Redirect error stream
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        PrintStream ps = new PrintStream(os);
+        PrintStream old = System.err;
+        System.setErr(ps);
+        CompilerMain.execute(file.getPath(), file.getPath());
+        // Restore error stream
+        System.setErr(old);
+        Assert.assertTrue(os.toString().contains("Did you forget to specify"));
     }
 
     @Test
@@ -609,12 +768,14 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
     @Test
     public void testSchema() throws IOException, SQLException {
         String[] statements = new String[]{
-                "CREATE TABLE T (\n" +
-                        "COL1 INT NOT NULL" +
-                        ", COL2 DOUBLE NOT NULL" +
-                        ", COL3 VARCHAR(3) PRIMARY KEY" +
-                        ", COL4 VARCHAR(3) ARRAY" +
-                        ")",
+                """
+                CREATE TABLE T (
+                COL1 INT NOT NULL
+                , COL2 DOUBLE NOT NULL
+                , COL3 VARCHAR(3) PRIMARY KEY
+                , COL4 VARCHAR(3) ARRAY
+                , COL5 MAP<INT, INT>
+                )""",
                 "CREATE VIEW V AS SELECT COL1 AS \"xCol\" FROM T",
                 "CREATE VIEW V1 (\"yCol\") AS SELECT COL1 FROM T"
         };
@@ -626,7 +787,7 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
         CompilerMessages message = CompilerMain.execute(
                 "-js", json.getPath(), "-o", tmp.getPath(), file.getPath());
         Assert.assertEquals(message.exitCode, 0);
-        ObjectMapper mapper = new ObjectMapper();
+        ObjectMapper mapper = Utilities.deterministicObjectMapper();
         JsonNode parsed = mapper.readTree(json);
         Assert.assertNotNull(parsed);
         String jsonContents  = Utilities.readFile(json.toPath());
@@ -639,38 +800,54 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
                       "name" : "COL1",
                       "case_sensitive" : false,
                       "columntype" : {
-                        "type" : "INTEGER",
-                        "nullable" : false
+                        "nullable" : false,
+                        "type" : "INTEGER"
                       }
                     }, {
                       "name" : "COL2",
                       "case_sensitive" : false,
                       "columntype" : {
-                        "type" : "DOUBLE",
-                        "nullable" : false
+                        "nullable" : false,
+                        "type" : "DOUBLE"
                       }
                     }, {
                       "name" : "COL3",
                       "case_sensitive" : false,
                       "columntype" : {
-                        "type" : "VARCHAR",
                         "nullable" : true,
-                        "precision" : 3
+                        "precision" : 3,
+                        "type" : "VARCHAR"
                       }
                     }, {
                       "name" : "COL4",
                       "case_sensitive" : false,
                       "columntype" : {
-                        "type" : "ARRAY",
-                        "nullable" : true,
                         "component" : {
-                          "type" : "VARCHAR",
                           "nullable" : false,
-                          "precision" : 3
+                          "precision" : 3,
+                          "type" : "VARCHAR"
+                        },
+                        "nullable" : true,
+                        "type" : "ARRAY"
+                      }
+                    }, {
+                      "name" : "COL5",
+                      "case_sensitive" : false,
+                      "columntype" : {
+                        "key" : {
+                          "nullable" : false,
+                          "type" : "INTEGER"
+                        },
+                        "nullable" : true,
+                        "type" : "MAP",
+                        "value" : {
+                          "nullable" : false,
+                          "type" : "INTEGER"
                         }
                       }
                     } ],
-                    "primary_key" : [ "COL3" ]
+                    "primary_key" : [ "COL3" ],
+                    "materialized" : false
                   } ],
                   "outputs" : [ {
                     "name" : "V",
@@ -679,10 +856,11 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
                       "name" : "xCol",
                       "case_sensitive" : false,
                       "columntype" : {
-                        "type" : "INTEGER",
-                        "nullable" : false
+                        "nullable" : false,
+                        "type" : "INTEGER"
                       }
-                    } ]
+                    } ],
+                    "materialized" : false
                   }, {
                     "name" : "V1",
                     "case_sensitive" : false,
@@ -690,10 +868,11 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
                       "name" : "yCol",
                       "case_sensitive" : true,
                       "columntype" : {
-                        "type" : "INTEGER",
-                        "nullable" : false
+                        "nullable" : false,
+                        "type" : "INTEGER"
                       }
-                    } ]
+                    } ],
+                    "materialized" : false
                   } ]
                 }""", jsonContents);
     }
@@ -722,7 +901,7 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
         CompilerMessages message = CompilerMain.execute(
                 "-js", json.getPath(), "-o", tmp.getPath(), file.getPath());
         Assert.assertEquals(message.exitCode, 0);
-        ObjectMapper mapper = new ObjectMapper();
+        ObjectMapper mapper = Utilities.deterministicObjectMapper();
         JsonNode parsed = mapper.readTree(json);
         Assert.assertNotNull(parsed);
         String jsonContents  = Utilities.readFile(json.toPath());
@@ -766,7 +945,7 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
                 #[test]
                 pub fn test() {
                     use dbsp_adapters::{CircuitCatalog, RecordFormat};
-                                
+                
                     let (mut circuit, catalog) = circuit(CircuitConfig::with_workers(2))
                         .expect("Failed to build circuit");
                     let persons = catalog
@@ -790,12 +969,12 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
                     circuit
                         .step()
                         .unwrap();
-                                
+                
                     let adult = &catalog
                         .output_handles("ADULT")
                         .expect("Failed to get output collection handles")
                         .delta_handle;
-                                
+                
                     // Read the produced output
                     let out = adult.consolidate();
                     // Print the produced output
@@ -860,6 +1039,7 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
         ObjectMapper mapper = new ObjectMapper();
         JsonNode jsonNode = mapper.readTree(json);
         Assert.assertNotNull(jsonNode);
+        Assert.assertNotNull(jsonNode.get(0).get("snippet").asText());
     }
 
     @Test
@@ -878,13 +1058,31 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
     }
 
     @Test
+    public void testLocalView() {
+        String sql = """
+                    CREATE TABLE T(I INTEGER, S VARCHAR);
+                    CREATE LOCAL VIEW V AS SELECT * FROM T;""";
+        DBSPCompiler compiler = this.testCompiler();
+        compiler.compileStatements(sql);
+        DBSPCircuit circuit = getCircuit(compiler);
+        Assert.assertEquals(0, circuit.getOutputCount());
+
+        String oneMore = "CREATE VIEW W AS SELECT * FROM V;";
+        compiler = this.testCompiler();
+        compiler.compileStatements(sql + oneMore);
+        circuit = getCircuit(compiler);
+        Assert.assertEquals(1, circuit.getOutputCount());
+    }
+
+    @Test
     public void testRemove() {
         DBSPCompiler compiler = this.testCompiler();
         compiler.compileStatement("CREATE TABLE T(I INTEGER, S VARCHAR)");
         CompilerCircuitStream ccs = new CompilerCircuitStream(compiler);
         Change change = ccs.toChange("""
                 INSERT INTO T VALUES(1, 'x');
-                REMOVE FROM T VALUES(2, 'Y');""").simplify();
+                REMOVE FROM T VALUES(2, 'Y');
+                REMOVE FROM T VALUES(3, 'Z');""").simplify();
         DBSPZSetLiteral expected = DBSPZSetLiteral.emptyWithElementType(
                 new DBSPTypeTuple(
                         new DBSPTypeInteger(CalciteObject.EMPTY, 32, true, true),
@@ -895,6 +1093,9 @@ public class OtherTests extends BaseSQLTests implements IWritesLogs {
         expected.add(new DBSPTupleExpression(
                 new DBSPI32Literal(2, true),
                 new DBSPStringLiteral("Y", true)), -1);
+        expected.add(new DBSPTupleExpression(
+                new DBSPI32Literal(3, true),
+                new DBSPStringLiteral("Z", true)), -1);
         boolean same = change.getSet(0).sameValue(expected);
         Assert.assertTrue(same);
     }

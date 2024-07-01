@@ -23,7 +23,7 @@
 
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPClosureExpression;
@@ -33,24 +33,18 @@ import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import javax.annotation.Nullable;
 import java.util.List;
 
-/**
- * Implemented as a map with identity function.  Should be optimized away,
- * but sometimes it's useful to have in intermediate representations.
- */
-public class DBSPNoopOperator extends DBSPUnaryOperator {
+/** Implemented as a map with identity function.  Should be optimized away,
+ * but sometimes it's useful to have in intermediate representations. */
+public final class DBSPNoopOperator extends DBSPUnaryOperator {
     static DBSPClosureExpression getClosure(DBSPType rowType) {
-        DBSPVariablePath var = rowType.ref().var("i");
+        DBSPVariablePath var = rowType.ref().var();
         return var.deref().applyClone().closure(var.asParameter());
     }
 
-    /** Some Noop operators correspond to views that are not outputs */
-    @Nullable public final String viewName;
-
     public DBSPNoopOperator(CalciteObject node, DBSPOperator source,
-                            @Nullable String comment, @Nullable String viewName) {
+                            @Nullable String comment) {
         super(node, "map", getClosure(source.getOutputRowType()),
                 source.getType(), source.isMultiset, source, comment);
-        this.viewName = viewName;
     }
 
     @Override
@@ -65,7 +59,7 @@ public class DBSPNoopOperator extends DBSPUnaryOperator {
     @Override
     public DBSPOperator withInputs(List<DBSPOperator> newInputs, boolean force) {
         if (force || this.inputsDiffer(newInputs))
-            return new DBSPNoopOperator(this.getNode(), newInputs.get(0), this.comment, this.viewName);
+            return new DBSPNoopOperator(this.getNode(), newInputs.get(0), this.comment);
         return this;
     }
 }

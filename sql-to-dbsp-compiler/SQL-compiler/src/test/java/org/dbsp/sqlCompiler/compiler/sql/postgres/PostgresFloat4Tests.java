@@ -18,7 +18,7 @@ public class PostgresFloat4Tests extends SqlIoTest {
                 INSERT INTO FLOAT4_TBL(f1) VALUES ('1.2345678901234e-20');""");
     }
 
-    @Test @Ignore("Waiting for https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6094")
+    @Test
     public void testOverflow() {
         this.q("""
                 SELECT 10e70 :: FLOAT4;
@@ -35,24 +35,28 @@ public class PostgresFloat4Tests extends SqlIoTest {
                 result
                 ------
                 -Infinity""");
+    }
+
+    @Test @Ignore("Waiting for https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6059")
+    public void testSpecialFP() {
         this.q("""
                 SELECT -10e-70 :: FLOAT4;
                 result
                 ------
-                0""");
+                 -0""");
         // The next one fails in Postgres
         this.q("""
                 SELECT -10e-400 :: FLOAT4;
                 result
                 ------
-                0""");
+                 -0""");
     }
 
     @Test
     public void testOverflowException() {
-        this.shouldFail("SELECT 10e400 :: FLOAT4",
+        this.queryFailingInCompilation("SELECT 10e400 :: FLOAT4",
                 "out of range");
-        this.shouldFail("SELECT-10e400 :: FLOAT4",
+        this.queryFailingInCompilation("SELECT-10e400 :: FLOAT4",
                 "out of range");
     }
 
@@ -64,9 +68,9 @@ public class PostgresFloat4Tests extends SqlIoTest {
                 result
                 ------
                 0""");
-        this.shouldFail("SELECT 5.0.0",
+        this.queryFailingInCompilation("SELECT 5.0.0",
                 "Error parsing SQL");
-        this.shouldFail("SELECT 5.  0",
+        this.queryFailingInCompilation("SELECT 5.  0",
                 "Error parsing SQL");
     }
 

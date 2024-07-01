@@ -1,5 +1,4 @@
-import { hexToRGBA } from 'src/@core/utils/hex-to-rgba'
-
+import { hexToRGBA } from '@core/utils/hex-to-rgba'
 import { Theme } from '@mui/material/styles'
 
 const Chip = (theme: Theme) => {
@@ -17,7 +16,7 @@ const Chip = (theme: Theme) => {
         },
         outlined: {
           '&.MuiChip-colorDefault': {
-            borderColor: `rgba(${theme.palette.customColors.main}, 0.22)`
+            borderColor: hexToRGBA(theme.palette.customColors.main, 0.22)
           }
         },
         deleteIcon: {

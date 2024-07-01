@@ -2,7 +2,7 @@
 use std::time::Duration;
 
 use pipeline_types::{
-    config::{ConnectorConfig, PipelineConfig, RuntimeConfig},
+    config::{PipelineConfig, RuntimeConfig},
     error::ErrorResponse,
 };
 
@@ -13,6 +13,8 @@ use crate::{
     },
     runner::RunnerError,
 };
+use pipeline_types::config::ConnectorConfig;
+use pipeline_types::service::{KafkaService, ServiceConfig, ServiceConfigVariant};
 use uuid::uuid;
 
 use super::ManagerError;
@@ -131,6 +133,16 @@ pub(crate) fn cannot_delete_when_running() -> ErrorResponse {
 }
 
 pub(crate) fn pipeline_config() -> PipelineConfig {
+    let example_service = crate::db::ServiceDescr {
+        service_id: ServiceId(uuid!("00000000-0000-0000-0000-000000001234")),
+        name: "example-service1".to_string(),
+        description: "An example service".to_string(),
+        config: ServiceConfig::Kafka(KafkaService {
+            bootstrap_servers: vec!["localhost:9092".to_string()],
+            options: Default::default(),
+        }),
+        config_type: KafkaService::config_type(),
+    };
     let input_connector = crate::db::ConnectorDescr {
         connector_id: ConnectorId(uuid!("01890c99-376f-743e-ac30-87b6c0ce74ef")),
         name: "Input".into(),
@@ -143,6 +155,7 @@ transport:
         auto.offset.reset: "earliest"
         group.instance.id: "group0"
         topics: [test_input1]
+        kafka_service: example-service1
 format:
     name: csv"#,
         ),
@@ -184,7 +197,9 @@ format:
     };
 
     let connectors = vec![input_connector, output_connector];
-    PipelineRevision::generate_pipeline_config(&pipeline, &connectors).unwrap()
+    let services_for_connectors = vec![vec![example_service], vec![]];
+    PipelineRevision::generate_pipeline_config(&pipeline, &connectors, &services_for_connectors)
+        .unwrap()
 }
 
 //

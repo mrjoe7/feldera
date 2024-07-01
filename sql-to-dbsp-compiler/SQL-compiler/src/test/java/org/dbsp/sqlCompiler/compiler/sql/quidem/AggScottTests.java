@@ -1,7 +1,5 @@
 package org.dbsp.sqlCompiler.compiler.sql.quidem;
 
-import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.CalciteCompiler;
-import org.dbsp.util.Logger;
 import org.junit.Ignore;
 import org.junit.Test;
 
@@ -57,7 +55,7 @@ public class AggScottTests extends ScottBaseTests {
                 |        | 1 | 14 |
                 +--------+---+----+
                 (5 rows)
-                                
+                
                 -- Degenerate case: GROUP_ID() without GROUPING SETS
                 select group_id() as g
                 from emp
@@ -68,7 +66,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 0 |
                 +---+
                 (1 row)
-                                
+                
                 -- GROUP_ID() does not make a query into an aggregate query
                 select group_id() as g, sum(3) as s3
                 from emp;
@@ -78,7 +76,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 0 | 42 |
                 +---+----+
                 (1 row)
-                                
+                
                 -- Extremely degenerate case: GROUP_ID on an empty table
                 select group_id() as g, sum(3) as s3
                 from emp
@@ -89,7 +87,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 0 |    |
                 +---+----+
                 (1 row)
-                                
+                
                 -- As above, explicit empty GROUP BY
                 select group_id() as g
                 from emp
@@ -101,7 +99,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 0 |
                 +---+
                 (1 row)
-                                
+                
                 -- As above, non-empty GROUP BY
                 select group_id() as g
                 from emp
@@ -112,7 +110,7 @@ public class AggScottTests extends ScottBaseTests {
                 +---+
                 +---+
                 (0 rows)
-                                
+                
                 -- From http://rwijk.blogspot.com/2008/12/groupid.html
                 select deptno
                        , job
@@ -162,7 +160,7 @@ public class AggScottTests extends ScottBaseTests {
                 |        |NULL|              |NULL|     29025.00 | grouped by ()|
                 +--------+-----------+-------+--------+----------+-----------------------------------+
                 (27 rows)
-                                
+                
                 -- From http://rwijk.blogspot.com/2008/12/groupid.html
                 select deptno
                        , job
@@ -223,7 +221,7 @@ public class AggScottTests extends ScottBaseTests {
                 |        |NULL|              |NULL|     29025.00 | grouped by (), grouping set 6|
                 +--------+-----------+-------+--------+----------+-----------------------------------+
                 (31 rows)
-                                
+                
                 -- There are duplicate GROUPING SETS
                 select deptno, sum(sal) as s
                 from emp as t
@@ -239,7 +237,7 @@ public class AggScottTests extends ScottBaseTests {
                 |     30 |  9400.00 |
                 +--------+----------+
                 (6 rows)
-                                
+                
                 -- Similar, not duplicate GROUPING SETS
                 select deptno, sum(sal) as s
                 from emp as t
@@ -252,7 +250,7 @@ public class AggScottTests extends ScottBaseTests {
                 |     30 |  9400.00 |
                 +--------+----------+
                 (3 rows)
-                                
+                
                 -- Complex GROUPING SETS clause that contains duplicates
                 select sum(sal) as s
                 from emp as t
@@ -294,7 +292,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 8275.00 |
                 +---------+
                 (28 rows)
-                                
+                
                 -- Equivalent query using flat GROUPING SETS
                 select sum(sal) as s
                 from emp
@@ -396,7 +394,7 @@ public class AggScottTests extends ScottBaseTests {
                   | -86.4 | -100.0 |
                   +-------+--------+
                   (1 row)
-                                  
+                  
                   select max(v) as x, min(v) as n
                   from (values cast(-86.4 as double), cast(-100 as double), cast(2 as double)) as t(v);
                   +-----+--------+
@@ -405,7 +403,7 @@ public class AggScottTests extends ScottBaseTests {
                   | 2.0 | -100.0 |
                   +-----+--------+
                   (1 row)
-                                  
+                  
                   select max(v) as x, min(v) as n
                   from (values cast(-86.4 as real), cast(-100 as real)) as t(v);
                   +-------+--------+
@@ -414,7 +412,7 @@ public class AggScottTests extends ScottBaseTests {
                   | -86.4 | -100.0 |
                   +-------+--------+
                   (1 row)
-                                  
+                  
                   -- [CALCITE-551] Sub-query inside aggregate function
                   SELECT SUM(
                     CASE WHEN deptno IN (SELECT deptno FROM dept) THEN 1
@@ -426,7 +424,7 @@ public class AggScottTests extends ScottBaseTests {
                   | 14 |
                   +----+
                   (1 row)
-                                  
+                  
                   SELECT SUM((select min(cast(deptno as integer)) from dept)) as s
                   FROM emp;
                   +-----+
@@ -435,7 +433,7 @@ public class AggScottTests extends ScottBaseTests {
                   | 140 |
                   +-----+
                   (1 row)
-                                  
+                  
                   -- As above, but with GROUP BY
                   SELECT SUM((select min(cast(deptno as integer)) from dept)) as s, deptno
                   FROM emp
@@ -448,7 +446,7 @@ public class AggScottTests extends ScottBaseTests {
                   | 60 |     30 |
                   +----+--------+
                   (3 rows)
-                                  
+                  
                   -- As above, but with correlation
                   SELECT SUM(
                     (select char_length(dname) from dept where dept.deptno = emp.empno)) as s
@@ -476,7 +474,7 @@ public class AggScottTests extends ScottBaseTests {
                 |              14 |
                 +-----------------+
                 (1 row)
-                                
+                
                 -- FUSION
                 select cardinality(fusion(empnos)) as f_empnos_length from (select deptno, collect(empno) as empnos
                 from emp
@@ -487,7 +485,7 @@ public class AggScottTests extends ScottBaseTests {
                 |              14 |
                 +-----------------+
                 (1 row)
-                                
+                
                 -- FUSION on sub-total
                 select job, fusion(empnos) as empnos
                 from (
@@ -505,7 +503,7 @@ public class AggScottTests extends ScottBaseTests {
                 | SALESMAN  | [7499, 7521, 7654, 7844] |
                 +-----------+--------------------------+
                 (5 rows)
-                                
+                
                 -- FUSION grand total
                 select fusion(deptnos) as deptnos
                 from (
@@ -518,7 +516,7 @@ public class AggScottTests extends ScottBaseTests {
                 | [20, 10, 30] |
                 +--------------+
                 (1 row)
-                                
+                
                 -- COLLECT
                 select deptno, collect(empno) as empnos
                 from emp
@@ -531,7 +529,7 @@ public class AggScottTests extends ScottBaseTests {
                 |     30 | [7499, 7521, 7654, 7698, 7844, 7900] |
                 +--------+--------------------------------------+
                 (3 rows)
-                                
+                
                 -- COLLECT DISTINCT
                 select deptno, collect(distinct job) as jobs
                 from emp
@@ -544,7 +542,7 @@ public class AggScottTests extends ScottBaseTests {
                 |     30 | [SALESMAN, MANAGER, CLERK]  |
                 +--------+-----------------------------+
                 (3 rows)
-                                
+                
                 -- COLLECT ... FILTER
                 select deptno, collect(empno) filter (where empno < 7550) as empnos
                 from emp
@@ -582,7 +580,7 @@ public class AggScottTests extends ScottBaseTests {
                 |     30 |  950.00 |  950.00 |  950.00 |  950.00 |    0.00 |  350.00 |
                 +--------+---------+---------+---------+---------+---------+---------+
                 (3 rows)
-                                
+                
                 -- Aggregate FILTER on condition in GROUP BY
                 select deptno,
                   sum(sal) filter (where deptno = 10) sal_10
@@ -596,7 +594,7 @@ public class AggScottTests extends ScottBaseTests {
                 |     30 |         |
                 +--------+---------+
                 (3 rows)
-                                
+                
                 -- Aggregate FILTER with HAVING
                 select deptno
                 from emp
@@ -650,7 +648,7 @@ public class AggScottTests extends ScottBaseTests {
                 |     30 |  9400.00 |  9400.00 | 4 |
                 +--------+----------+----------+---+
                 (3 rows)
-                                
+                
                 -- Aggregate FILTER with DISTINCT
                 select deptno,
                  count(distinct job) as cdj
@@ -699,7 +697,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 0 | 0 | 0 |
                 +---+---+---+
                 (1 row)
-                                
+                
                 -- Convert CASE to FILTER with no input rows
                 select  sum(case when x = 1 then 1 else 0 end) as a,
                         sum(case when x = 1 then 2 else 0 end) as b,
@@ -711,7 +709,7 @@ public class AggScottTests extends ScottBaseTests {
                 |   |   |   |
                 +---+---+---+
                 (1 row)
-                                
+                
                 -- Convert CASE to FILTER without matches
                 select  sum(case when x = 1 then 1 else 0 end) as a,
                         sum(case when x = 1 then 2 else 0 end) as b,
@@ -723,7 +721,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 0 | 0 | -4 |
                 +---+---+----+
                 (1 row)
-                                
+                
                 -- Same, expressed as FILTER
                 select count(*) filter (where (x = 0) is not true) as c
                 from (values 0, null, 0, 1) as t(x);
@@ -733,7 +731,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 2 |
                 +---+
                 (1 row)
-                                
+                
                 -- Similar, not quite the same
                 select count(*) filter (where (x = 0) is false) as c
                 from (values 0, null, 0, 1) as t(x);
@@ -745,7 +743,7 @@ public class AggScottTests extends ScottBaseTests {
                 (1 row)""");
     }
 
-    @Test @Ignore("https://github.com/feldera/feldera/issues/1481")
+    @Test
     public void testCompositeCount() {
         this.qs("""
                 -- Composite COUNT and FILTER
@@ -767,8 +765,6 @@ public class AggScottTests extends ScottBaseTests {
     @Test
     public void testAggregates2() {
         this.qs("""
-                -- [CALCITE-1293] Bad code generated when argument to COUNT(DISTINCT) is a
-                -- GROUP BY column
                 select count(distinct deptno) as cd, count(*) as c
                 from emp
                 group by deptno;
@@ -861,7 +857,7 @@ public class AggScottTests extends ScottBaseTests {
                 |     30 | 3 | 2 |
                 +--------+---+---+
                 (3 rows)
-                                           
+                
                 -- Multiple distinct count and non-distinct aggregates, no GROUP BY
                 select count(distinct job) as dj,
                  count(job) as j,
@@ -879,11 +875,8 @@ public class AggScottTests extends ScottBaseTests {
     @Test @Ignore("https://github.com/feldera/feldera/issues/1507")
     public void testAvg() {
         this.qs("""
-                -- [CALCITE-280] BigDecimal underflow
-                -- Previously threw "java.lang.ArithmeticException: Non-terminating decimal
-                -- expansion; no exact representable decimal result"
-                select avg(comm) as a, count(comm) as c from --
-                   emp where empno < 7844;
+                select avg(comm) as a, count(comm) as c from
+                emp where empno < 7844;
                 +-------------------+---+
                 | A                 | C |
                 +-------------------+---+
@@ -1095,7 +1088,7 @@ public class AggScottTests extends ScottBaseTests {
                 | 56400.00 | 36 | 36 |
                 +----------+----+----+
                 (3 rows)
-                                
+                
                 -- Push sum, self-join, aggregate by column on "many" side
                 select sum(e.sal) as s
                 from emp e join emp m on e.mgr = m.empno
@@ -1130,9 +1123,8 @@ public class AggScottTests extends ScottBaseTests {
                 (6 rows)""");
     }
 
-    @Test @Ignore("TODO: Crashes the compiler")
+    @Test
     public void testNestedOrderby() {
-        Logger.INSTANCE.setLoggingLevel(CalciteCompiler.class, 2);
         this.qs("""
                 -- Collation of LogicalAggregate ([CALCITE-783] and [CALCITE-822])
                 select  sum(x) as sum_cnt,

@@ -23,7 +23,7 @@
 
 package org.dbsp.sqlCompiler.circuit.operator;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.outer.CircuitVisitor;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
@@ -34,7 +34,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Objects;
 
-public class DBSPFilterOperator extends DBSPUnaryOperator {
+public final class DBSPFilterOperator extends DBSPUnaryOperator {
     public DBSPFilterOperator(CalciteObject node, DBSPExpression condition, DBSPOperator input) {
         super(node, "filter", condition, input.outputType, input.isMultiset, input);
         this.checkResultType(condition, new DBSPTypeBool(CalciteObject.EMPTY, false));

@@ -28,6 +28,7 @@ import org.apache.calcite.util.TimeString;
 import org.apache.commons.lang3.StringUtils;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
+import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
 import org.dbsp.sqlCompiler.ir.expression.DBSPBaseTupleExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPBinaryExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPBorrowExpression;
@@ -41,6 +42,7 @@ import org.dbsp.sqlCompiler.ir.expression.DBSPOpcode;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPBoolLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPDateLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPDecimalLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI128Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI16Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI32Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI64Literal;
@@ -48,6 +50,10 @@ import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI8Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPStringLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPTimeLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU128Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU16Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU32Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU64Literal;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.IHasZero;
 import org.dbsp.sqlCompiler.ir.type.IsNumericType;
@@ -57,9 +63,11 @@ import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeInteger;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeNull;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeString;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeTime;
+import org.dbsp.util.Logger;
 import org.dbsp.util.Utilities;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -83,6 +91,24 @@ public class Simplify extends InnerRewriteVisitor {
 
     public Simplify(IErrorReporter reporter) {
         super(reporter);
+    }
+
+    @Override
+    public void startVisit(IDBSPInnerNode node) {
+        super.startVisit(node);
+        Logger.INSTANCE.belowLevel(this, 1)
+                .append("Starting Simplify on ")
+                .append(node)
+                .newline();
+    }
+
+    @Override
+    public void endVisit() {
+        super.endVisit();
+        Logger.INSTANCE.belowLevel(this, 1)
+                .append("Result is ")
+                .append(this.lastResult != null ? this.lastResult.toString() : "")
+                .newline();
     }
 
     @Override
@@ -113,7 +139,11 @@ public class Simplify extends InnerRewriteVisitor {
                 // Cast from type to Option<type>
                 result = lit.getWithNullable(type.mayBeNull);
             } else if (lit.isNull) {
-                result = DBSPLiteral.none(type);
+                if (type.mayBeNull) {
+                    result = DBSPLiteral.none(type);
+                }
+                // Otherwise this expression will certainly generate
+                // a runtime error if evaluated.  But it may never be evaluated.
             } else if (litType.is(DBSPTypeNull.class)) {
                 // This is a literal with type "NULL".
                 // Convert it to a literal of the resulting type
@@ -129,7 +159,6 @@ public class Simplify extends InnerRewriteVisitor {
                     DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("uuuu-MM-dd", Locale.US)
                             .withResolverStyle(ResolverStyle.STRICT);
                     try {
-                        //noinspection ResultOfMethodCallIgnored
                         LocalDate.parse(str.value, dateFormatter); // executed for exception
                         result = new DBSPDateLiteral(lit.getNode(), type, new DateString(str.value));
                     } catch (DateTimeParseException ex) {
@@ -173,8 +202,7 @@ public class Simplify extends InnerRewriteVisitor {
                         }
                         result = new DBSPStringLiteral(expression.getNode(), type, value, str.charset);
                     }
-                } else
-                    if (type.is(DBSPTypeInteger.class)) {
+                } else if (type.is(DBSPTypeInteger.class)) {
                     DBSPTypeInteger ti = type.to(DBSPTypeInteger.class);
                     switch (ti.getWidth()) {
                         case 8: {
@@ -233,6 +261,49 @@ public class Simplify extends InnerRewriteVisitor {
                 Objects.requireNonNull(i.value);
                 if (type.is(DBSPTypeDecimal.class)) {
                     result = new DBSPDecimalLiteral(source.getNode(), type, new BigDecimal(i.value));
+                } else if (type.is(DBSPTypeInteger.class)) {
+                    if (i.isNull) {
+                        result = DBSPLiteral.none(type);
+                    } else {
+                        switch (type.code) {
+                            case INT8:
+                                if (i.value >= Byte.MIN_VALUE && i.value <= Byte.MAX_VALUE) {
+                                    result = new DBSPI8Literal(source.getNode(), type, i.value.byteValue());
+                                }
+                                break;
+                            case INT16:
+                                if (i.value >= Short.MIN_VALUE && i.value <= Short.MAX_VALUE) {
+                                    result = new DBSPI16Literal(source.getNode(), type, i.value.shortValue());
+                                }
+                                break;
+                            case INT64:
+                                result = new DBSPI64Literal(source.getNode(), type, i.value.longValue());
+                                break;
+                            case INT128:
+                                result = new DBSPI128Literal(source.getNode(), type, BigInteger.valueOf(i.value));
+                                break;
+                            case UINT16:
+                                if (i.value >= 0 && i.value <= 65536) {
+                                    result = new DBSPU16Literal(source.getNode(), type, i.value);
+                                }
+                                break;
+                            case UINT32:
+                                if (i.value >= 0) {
+                                    result = new DBSPU32Literal(source.getNode(), type, i.value.longValue());
+                                }
+                                break;
+                            case UINT64:
+                                if (i.value >= 0) {
+                                    result = new DBSPU64Literal(source.getNode(), type, BigInteger.valueOf(i.value));
+                                }
+                                break;
+                            case UINT128:
+                                if (i.value >= 0) {
+                                    result = new DBSPU128Literal(source.getNode(), type, BigInteger.valueOf(i.value));
+                                }
+                                break;
+                        }
+                    }
                 }
             } else if (lit.is(DBSPDecimalLiteral.class)) {
                 DBSPDecimalLiteral dec = lit.to(DBSPDecimalLiteral.class);
@@ -290,7 +361,7 @@ public class Simplify extends InnerRewriteVisitor {
         this.push(expression);
         DBSPExpression source = this.transform(expression.expression);
         this.pop(expression);
-        DBSPExpression result = source.borrow();
+        DBSPExpression result = source.borrow(expression.mut);
         if (source.is(DBSPDerefExpression.class)) {
             result = source.to(DBSPDerefExpression.class).expression;
         }
@@ -380,23 +451,28 @@ public class Simplify extends InnerRewriteVisitor {
         } else if (expression.operation.equals(DBSPOpcode.ADD)) {
             if (left.is(DBSPLiteral.class)) {
                 DBSPLiteral leftLit = left.to(DBSPLiteral.class);
-                IHasZero iLeftType = leftType.to(IHasZero.class);
-                if (iLeftType.isZero(leftLit)) {
-                    result = right;
-                } else if (leftLit.isNull) {
-                    result = left;
+                IHasZero iLeftType = leftType.as(IHasZero.class);
+                if (iLeftType != null) {
+                    if (iLeftType.isZero(leftLit)) {
+                        result = right;
+                    } else if (leftLit.isNull) {
+                        // null + anything is null
+                        result = left;
+                    }
                 }
             } else if (right.is(DBSPLiteral.class)) {
                 DBSPLiteral rightLit = right.to(DBSPLiteral.class);
-                IHasZero iRightType = rightType.to(IHasZero.class);
-                if (iRightType.isZero(rightLit)) {
-                    result = left;
-                } else if (rightLit.isNull) {
-                    result = right;
+                IHasZero iRightType = rightType.as(IHasZero.class);
+                if (iRightType != null) {
+                    if (iRightType.isZero(rightLit)) {
+                        result = left;
+                    } else if (rightLit.isNull) {
+                        result = right;
+                    }
                 }
             }
         } else if (expression.operation.equals(DBSPOpcode.MUL)) {
-            if (left.is(DBSPLiteral.class)) {
+            if (left.is(DBSPLiteral.class) && leftType.is(IsNumericType.class)) {
                 DBSPLiteral leftLit = left.to(DBSPLiteral.class);
                 IsNumericType iLeftType = leftType.to(IsNumericType.class);
                 if (iLeftType.isOne(leftLit)) {
@@ -408,7 +484,7 @@ public class Simplify extends InnerRewriteVisitor {
                 } else if (leftLit.isNull) {
                     result = left;
                 }
-            } else if (right.is(DBSPLiteral.class)) {
+            } else if (right.is(DBSPLiteral.class) && rightType.is(IsNumericType.class)) {
                 DBSPLiteral rightLit = right.to(DBSPLiteral.class);
                 IsNumericType iRightType = rightType.to(IsNumericType.class);
                 if (iRightType.isOne(rightLit)) {

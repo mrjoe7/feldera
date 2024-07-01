@@ -18,12 +18,13 @@ mod zset_macro;
 use crate::{
     dynamic::{DataTrait, DynUnit, DynWeightTyped, Erase, WeightTrait},
     trace::{
+        ord::vec::{VecIndexedWSet, VecIndexedWSetFactories, VecWSet, VecWSetFactories},
         Batch, BatchReader, Builder, Cursor, OrdIndexedWSet, OrdIndexedWSetFactories, OrdWSet,
         OrdWSetFactories, Trace,
     },
 };
 use dyn_clone::clone_box;
-use std::ops::{Add, Neg};
+use std::ops::Neg;
 
 use super::{AddAssignByRef, AddByRef, HasOne, NegByRef, ZRingValue};
 
@@ -39,14 +40,23 @@ pub type ZWeight = i64;
 /// A dynamically typed wrapper around [`ZWeight`].
 pub type DynZWeight = DynWeightTyped<ZWeight>;
 
-/// An in-memory Z-set with integer weights.
+/// A Z-set with integer weights.
 pub type OrdZSet<K> = OrdWSet<K, DynZWeight>;
 
 pub type OrdZSetFactories<K> = OrdWSetFactories<K, DynZWeight>;
 
-/// An in-memory indexed Z-set with integer weights.
+/// A in-memory Z-set with integer weights.
+pub type VecZSet<K> = VecWSet<K, DynZWeight>;
+
+pub type VecZSetFactories<K> = VecWSetFactories<K, DynZWeight>;
+
+/// An indexed Z-set with integer weights.
 pub type OrdIndexedZSet<K, V> = OrdIndexedWSet<K, V, DynZWeight>;
 pub type OrdIndexedZSetFactories<K, V> = OrdIndexedWSetFactories<K, V, DynZWeight>;
+
+/// An in-memory indexed Z-set with integer weights.
+pub type VecIndexedZSet<K, V> = VecIndexedWSet<K, V, DynZWeight>;
+pub type VecIndexedZSetFactories<K, V> = VecIndexedWSetFactories<K, V, DynZWeight>;
 
 // #[cfg(doc)]
 //use crate::trace::{ord::OrdIndexedZSet, ord::OrdZSet, BatchReader, DBWeight,
@@ -126,13 +136,7 @@ impl<Z> IndexedZSetReader for Z where Z: BatchReader<Time = (), R = DynZWeight> 
 ///
 /// For more information, see [`IndexedZSetReader`].
 pub trait IndexedZSet:
-    Batch<Time = (), R = DynZWeight>
-    + Add<Self, Output = Self>
-    + AddByRef
-    + AddAssignByRef
-    + Neg<Output = Self>
-    + NegByRef
-    + Eq
+    Batch<Time = (), R = DynZWeight> + AddByRef + AddAssignByRef + Neg<Output = Self> + NegByRef + Eq
 {
     /// Returns an indexed Z-set that contains all elements with positive
     /// weights from `self` with weights set to 1.
@@ -157,7 +161,6 @@ pub trait IndexedZSet:
 impl<Z> IndexedZSet for Z
 where
     Z: Batch<Time = (), R = DynZWeight>
-        + Add<Z, Output = Z>
         + AddByRef
         + AddAssignByRef
         + Neg<Output = Z>

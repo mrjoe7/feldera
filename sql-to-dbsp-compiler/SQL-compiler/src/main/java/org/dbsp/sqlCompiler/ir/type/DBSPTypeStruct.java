@@ -23,15 +23,15 @@
 
 package org.dbsp.sqlCompiler.ir.type;
 
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
 import org.dbsp.sqlCompiler.ir.DBSPNode;
 import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
 import org.dbsp.sqlCompiler.ir.IDBSPNode;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeUser;
 import org.dbsp.util.IIndentStream;
 import org.dbsp.util.Linq;
-import org.dbsp.util.Utilities;
 
 import javax.annotation.Nullable;
 import java.util.Collection;
@@ -43,27 +43,27 @@ import static org.dbsp.sqlCompiler.ir.type.DBSPTypeCode.STRUCT;
 
 public class DBSPTypeStruct extends DBSPType {
     public static class Field extends DBSPNode implements IHasType, IDBSPInnerNode {
-        /**
-         * Names coming from SQL may not be usable in Rust.
-         * The sanitized name is the one used in code generation.
-         * Initially names may not be "sane", but prior to code generation they
-         * have to be sanitized.
-         */
-        public final String sanitizedName;
+        /** Position within struct */
+        public final int index;
         public final String name;
         public final boolean nameIsQuoted;
         public final DBSPType type;
 
-        public Field(CalciteObject node, String name, String sanitizedName, DBSPType type, boolean nameIsQuoted) {
+        public Field(CalciteObject node, String name, int index,
+                     DBSPType type, boolean nameIsQuoted) {
             super(node);
-            this.sanitizedName = sanitizedName;
             this.name = name;
+            this.index = index;
             this.type = type;
             this.nameIsQuoted = nameIsQuoted;
         }
 
         public String getName() {
             return this.name;
+        }
+
+        public String getSanitizedName() {
+            return "field" + this.index;
         }
 
         public DBSPType getType() {
@@ -81,7 +81,7 @@ public class DBSPTypeStruct extends DBSPType {
             if (o == null || getClass() != o.getClass()) return false;
             Field that = (Field) o;
             return this.name.equals(that.name) &&
-                    this.sanitizedName.equals(that.sanitizedName) &&
+                    Objects.equals(this.index, that.index) &&
                     this.type.sameType(that.type);
         }
 
@@ -101,7 +101,7 @@ public class DBSPTypeStruct extends DBSPType {
             if (o == null)
                 return false;
             return this.name.equals(o.name) &&
-                    this.sanitizedName.equals(o.sanitizedName) &&
+                    Objects.equals(this.index, o.index) &&
                     this.type.sameType(o.type);
         }
 
@@ -115,14 +115,13 @@ public class DBSPTypeStruct extends DBSPType {
     }
 
     public final String name;
-    @Nullable
     public final String sanitizedName;
     public final LinkedHashMap<String, Field> fields;
 
-    public DBSPTypeStruct(CalciteObject node, String name, @Nullable String sanitizedName, Collection<Field> args) {
-        super(node, STRUCT, false);
+    public DBSPTypeStruct(CalciteObject node, String name, String sanitizedName,
+                          Collection<Field> args, boolean mayBeNull) {
+        super(node, STRUCT, mayBeNull);
         this.sanitizedName = sanitizedName;
-        assert this.sanitizedName == null || Utilities.isLegalRustIdentifier(sanitizedName);
         this.name = name;
         this.fields = new LinkedHashMap<>();
         for (Field f: args) {
@@ -133,16 +132,14 @@ public class DBSPTypeStruct extends DBSPType {
     }
 
     public DBSPTypeStruct rename(String newName) {
-        return new DBSPTypeStruct(this.getNode(), newName, this.sanitizedName, this.fields.values());
+        return new DBSPTypeStruct(this.getNode(), newName, this.sanitizedName, this.fields.values(), this.mayBeNull);
     }
 
     @Override
     public DBSPType setMayBeNull(boolean mayBeNull) {
         if (this.mayBeNull == mayBeNull)
             return this;
-        if (mayBeNull)
-            this.error("Nullable structs not supported");
-        return this;
+        return new DBSPTypeStruct(this.getNode(), this.name, this.sanitizedName, this.fields.values(), mayBeNull);
     }
 
     public boolean hasField(String fieldName) {
@@ -205,22 +202,36 @@ public class DBSPTypeStruct extends DBSPType {
 
     @Override
     public IIndentStream toString(IIndentStream builder) {
-        builder.append("struct ")
-                .append(this.sanitizedName != null ? this.sanitizedName : this.name)
-                .append(" {")
-                .increase();
-        for (DBSPTypeStruct.Field field: this.fields.values()) {
-            builder.append(field)
-                    .newline();
-        }
-        return builder
-                .decrease()
-                .append("}");
+        return builder.append("struct ")
+                .append(this.mayBeNull ? "?" : "")
+                .append(this.name);
     }
 
     /** Generate a tuple type by ignoring the struct and field names. */
     public DBSPTypeTuple toTuple() {
         List<DBSPType> types = Linq.list(Linq.map(this.fields.values(), f -> f.type));
         return new DBSPTypeTuple(this.getNode(), types);
+    }
+
+    private static DBSPType toTupleDeep(DBSPType type) {
+        if (type.is(DBSPTypeStruct.class)) {
+            DBSPTypeStruct struct = type.to(DBSPTypeStruct.class);
+            List<DBSPType> types = Linq.list(Linq.map(struct.fields.values(), f -> toTupleDeep(f.type)));
+            return new DBSPTypeTuple(struct.getNode(), types);
+        } else if (type.is(DBSPTypeUser.class)) {
+            DBSPTypeUser user = type.to(DBSPTypeUser.class);
+            DBSPType[] args = Linq.map(user.typeArgs, DBSPTypeStruct::toTupleDeep, DBSPType.class);
+            return new DBSPTypeUser(user.getNode(), user.code, user.name, user.mayBeNull, args);
+        } else if (type.is(DBSPTypeTupleBase.class)) {
+            DBSPTypeTupleBase tuple = type.to(DBSPTypeTupleBase.class);
+            DBSPType[] fields = Linq.map(tuple.tupFields, DBSPTypeStruct::toTupleDeep, DBSPType.class);
+            return tuple.makeType(Linq.list(fields));
+        }
+        return type;
+    }
+
+    /** Generate a tuple type by ignoring the struct and field names, recursively. */
+    public DBSPType toTupleDeep() {
+        return toTupleDeep(this);
     }
 }

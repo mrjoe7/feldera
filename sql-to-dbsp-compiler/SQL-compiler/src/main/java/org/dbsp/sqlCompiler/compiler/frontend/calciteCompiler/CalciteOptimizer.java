@@ -7,7 +7,6 @@ import org.apache.calcite.plan.hep.HepProgram;
 import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelVisitor;
-import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.rules.CoreRules;
 import org.apache.calcite.rel.rules.PruneEmptyRules;
@@ -31,7 +30,7 @@ public class CalciteOptimizer implements IWritesLogs {
             planner.setRoot(rel);
             RelNode result = planner.findBestExp();
             if (rel != result) {
-                Logger.INSTANCE.belowLevel(CalciteOptimizer.this, 3)
+                Logger.INSTANCE.belowLevel(CalciteOptimizer.this, 1)
                         .append("After ")
                         .append(this.getName())
                         .increase()
@@ -63,16 +62,28 @@ public class CalciteOptimizer implements IWritesLogs {
         }
 
         void addRules(RelOptRule... rules) {
-            for (RelOptRule rule: rules)
+            for (RelOptRule rule: rules) {
+                Logger.INSTANCE.belowLevel(CalciteOptimizer.this, 2)
+                        .append(this.getName())
+                        .append(" adding rule: ")
+                        .append(rule.toString())
+                        .newline();
                 this.builder.addRuleInstance(rule);
+            }
         }
     }
 
     public class SimpleOptimizerStep extends BaseOptimizerStep {
         SimpleOptimizerStep(String name, RelOptRule... rules) {
             super(name);
-            for (RelOptRule r: rules)
-                this.builder.addRuleInstance(r);
+            for (RelOptRule rule: rules) {
+                Logger.INSTANCE.belowLevel(CalciteOptimizer.this, 2)
+                        .append(this.getName())
+                        .append(" adding rule: ")
+                        .append(rule.toString())
+                        .newline();
+                this.builder.addRuleInstance(rule);
+            }
         }
     }
 
@@ -96,7 +107,7 @@ public class CalciteOptimizer implements IWritesLogs {
     }
 
     /** Helper class to discover whether a query contains outer joins */
-    class OuterJoinFinder extends RelVisitor {
+    static class OuterJoinFinder extends RelVisitor {
         public int outerJoinCount = 0;
         public int joinCount = 0;
         @Override public void visit(
@@ -116,56 +127,21 @@ public class CalciteOptimizer implements IWritesLogs {
         }
     }
 
-    /** Helper class to discover whether a query contains aggregations with group sets. */
-    /* Should be removed when https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6317
-     * is fixed. */
-    class AggregationGroupSets extends RelVisitor {
-        public boolean hasGroupSets = false;
-
-        @Override public void visit(
-                RelNode node, int ordinal,
-                @org.checkerframework.checker.nullness.qual.Nullable RelNode parent) {
-            if (node instanceof Aggregate) {
-                Aggregate aggregate = (Aggregate)node;
-                if (!aggregate.groupSets.isEmpty())
-                    this.hasGroupSets = true;
-            }
-            super.visit(node, ordinal, parent);
-        }
-
-        void run(RelNode node) {
-            this.go(node);
-        }
-    }
-
     void createOptimizer() {
-        this.addStep(new BaseOptimizerStep("Constant fold") {
-            @Override
-            HepProgram getProgram(RelNode node) {
-                // Check if program contains Aggregates with groupSets.
-                AggregationGroupSets ags = new AggregationGroupSets();
-                ags.run(node);
-
-                this.addRules(
-                        CoreRules.COERCE_INPUTS,
-                        CoreRules.FILTER_REDUCE_EXPRESSIONS);
-                // Rule is buggy: https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6317
-                if (!ags.hasGroupSets)
-                    this.addRules(CoreRules.PROJECT_REDUCE_EXPRESSIONS);
-                this.addRules(
-                        CoreRules.JOIN_REDUCE_EXPRESSIONS,
-                        CoreRules.WINDOW_REDUCE_EXPRESSIONS,
-                        CoreRules.CALC_REDUCE_EXPRESSIONS,
-                        CoreRules.CALC_REDUCE_DECIMALS,
-                        CoreRules.FILTER_VALUES_MERGE,
-                        CoreRules.PROJECT_FILTER_VALUES_MERGE,
-                        // Rule is buggy; disabled due to
-                        // https://github.com/feldera/feldera/issues/217
-                        // CoreRules.PROJECT_VALUES_MERGE
-                        CoreRules.AGGREGATE_VALUES);
-                return this.builder.build();
-            }
-        });
+        this.addStep(new SimpleOptimizerStep("Constant fold",
+                CoreRules.COERCE_INPUTS,
+                CoreRules.FILTER_REDUCE_EXPRESSIONS,
+                CoreRules.PROJECT_REDUCE_EXPRESSIONS,
+                CoreRules.JOIN_REDUCE_EXPRESSIONS,
+                CoreRules.WINDOW_REDUCE_EXPRESSIONS,
+                CoreRules.CALC_REDUCE_EXPRESSIONS,
+                CoreRules.CALC_REDUCE_DECIMALS,
+                CoreRules.FILTER_VALUES_MERGE,
+                CoreRules.PROJECT_FILTER_VALUES_MERGE,
+                // Rule is buggy; disabled due to
+                // https://github.com/feldera/feldera/issues/217
+                // CoreRules.PROJECT_VALUES_MERGE
+                CoreRules.AGGREGATE_VALUES));
         this.addStep(new SimpleOptimizerStep("Remove empty relations",
                 PruneEmptyRules.UNION_INSTANCE,
                 PruneEmptyRules.INTERSECT_INSTANCE,
@@ -181,32 +157,20 @@ public class CalciteOptimizer implements IWritesLogs {
         this.addStep(new SimpleOptimizerStep("Expand windows",
                 CoreRules.PROJECT_TO_LOGICAL_PROJECT_AND_WINDOW
         ));
-        this.addStep(new BaseOptimizerStep("Isolate DISTINCT aggregates") {
-            @Override
-            HepProgram getProgram(RelNode node) {
-                AggregationGroupSets finder = new AggregationGroupSets();
-                finder.run(node);
-                if (!finder.hasGroupSets) {
-                    // Convert DISTINCT aggregates into separate computations and join the results.
-                    // The following rule is unsound if aggregates contain groupSets
-                    // https://issues.apache.org/jira/browse/CALCITE-6332
-                    this.addRules(CoreRules.AGGREGATE_EXPAND_DISTINCT_AGGREGATES_TO_JOIN);
-                } else {
-                    // TODO: This sometimes triggers a bug in our compiler
-                    this.addRules(CoreRules.AGGREGATE_EXPAND_DISTINCT_AGGREGATES);
-                }
-                return this.builder.build();
-            }
-        });
+        this.addStep(new SimpleOptimizerStep("Isolate DISTINCT aggregates",
+                CoreRules.AGGREGATE_EXPAND_DISTINCT_AGGREGATES_TO_JOIN,
+                // Rule is unsound https://issues.apache.org/jira/browse/CALCITE-6403
+                CoreRules.AGGREGATE_EXPAND_DISTINCT_AGGREGATES));
 
         this.addStep(new BaseOptimizerStep("Join order") {
             @Override
             HepProgram getProgram(RelNode node) {
                 this.addRules(
                         CoreRules.JOIN_CONDITION_PUSH,
-                        CoreRules.JOIN_PUSH_EXPRESSIONS
-                        // Rule is unsound
-                        // CoreRules.FILTER_INTO_JOIN
+                        CoreRules.JOIN_PUSH_EXPRESSIONS,
+                        // TODO: Rule is unsound
+                        // https://github.com/feldera/feldera/issues/1702
+                        CoreRules.FILTER_INTO_JOIN
                 );
 
                 OuterJoinFinder finder = new OuterJoinFinder();

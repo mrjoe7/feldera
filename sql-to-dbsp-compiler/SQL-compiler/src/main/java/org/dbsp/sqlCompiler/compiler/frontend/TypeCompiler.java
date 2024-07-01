@@ -26,16 +26,42 @@ package org.dbsp.sqlCompiler.compiler.frontend;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.sql.type.SqlTypeName;
-import org.dbsp.sqlCompiler.compiler.ICompilerComponent;
 import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
+import org.dbsp.sqlCompiler.compiler.ICompilerComponent;
 import org.dbsp.sqlCompiler.compiler.errors.SourcePositionRange;
-import org.dbsp.sqlCompiler.ir.type.*;
-import org.dbsp.sqlCompiler.ir.type.primitive.*;
 import org.dbsp.sqlCompiler.compiler.errors.UnimplementedException;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.RelColumnMetadata;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.RelStruct;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
+import org.dbsp.sqlCompiler.ir.type.DBSPType;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeIndexedZSet;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeStruct;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeMap;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeVec;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeZSet;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBinary;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBool;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeDate;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeDecimal;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeDouble;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeGeoPoint;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeInteger;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeKeyword;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeMillisInterval;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeMonthsInterval;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeNull;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeReal;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeString;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeTime;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeTimestamp;
 import org.dbsp.util.FreshName;
-import org.dbsp.util.NameGen;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
 
 public class TypeCompiler implements ICompilerComponent {
     final DBSPCompiler compiler;
@@ -53,7 +79,28 @@ public class TypeCompiler implements ICompilerComponent {
         return new DBSPTypeIndexedZSet(elementType.getNode(), keyType, elementType);
     }
 
-    private static final NameGen structNameGen = new NameGen("struct_");
+    public DBSPType convertType(
+            CalciteObject node, String name,
+            List<RelColumnMetadata> columns, boolean asStruct, boolean mayBeNull) {
+        if (asStruct) {
+            List<DBSPTypeStruct.Field> fields = new ArrayList<>();
+            int index = 0;
+            for (RelColumnMetadata col : columns) {
+                DBSPType fType = this.convertType(col.getType(), true);
+                fields.add(new DBSPTypeStruct.Field(
+                        col.node, col.getName(), index++, fType, col.nameIsQuoted));
+            }
+            String saneName = this.compiler.getSaneStructName(name);
+            return new DBSPTypeStruct(node, name, saneName, fields, mayBeNull);
+        } else {
+            List<DBSPType> fields = new ArrayList<>();
+            for (RelColumnMetadata col : columns) {
+                DBSPType fType = this.convertType(col.getType(), false);
+                fields.add(fType);
+            }
+            return new DBSPTypeTuple(node, mayBeNull, fields);
+        }
+    }
 
     /**
      * Convert a Calcite RelDataType to an equivalent DBSP type.
@@ -65,9 +112,11 @@ public class TypeCompiler implements ICompilerComponent {
         CalciteObject node = CalciteObject.create(dt);
         boolean nullable = dt.isNullable();
         if (dt.isStruct()) {
+            boolean isNamedStruct = dt instanceof RelStruct;
             if (asStruct) {
                 List<DBSPTypeStruct.Field> fields = new ArrayList<>();
                 FreshName fieldNameGen = new FreshName(new HashSet<>());
+                int index = 0;
                 for (RelDataTypeField field : dt.getFieldList()) {
                     DBSPType type = this.convertType(field.getType(), true);
                     String fieldName = field.getName();
@@ -76,17 +125,24 @@ public class TypeCompiler implements ICompilerComponent {
                         // we will get an exception below where we create the struct.
                         fieldName = fieldNameGen.freshName(fieldName);
                     fields.add(new DBSPTypeStruct.Field(
-                            CalciteObject.create(dt), fieldName, fieldName, type, false));
+                            CalciteObject.create(dt), fieldName, index++, type, false));
                 }
-                String name = structNameGen.nextName();
-                return new DBSPTypeStruct(node, name, name, fields);
+                String saneName = this.compiler.getSaneStructName("*");
+                String name = saneName;
+                if (isNamedStruct) {
+                    RelStruct rs = (RelStruct) dt;
+                    name = rs.typeName.getSimple();
+                    // Struct must be already declared
+                    return this.compiler.getStructByName(name);
+                }
+                return new DBSPTypeStruct(node, name, saneName, fields, nullable);
             } else {
                 List<DBSPType> fields = new ArrayList<>();
                 for (RelDataTypeField field : dt.getFieldList()) {
-                    DBSPType type = this.convertType(field.getType(), false);
+                    DBSPType type = this.convertType(field.getType(), asStruct);
                     fields.add(type);
                 }
-                return new DBSPTypeTuple(node, fields);
+                return new DBSPTypeTuple(node, nullable, fields);
             }
         } else {
             SqlTypeName tn = dt.getSqlTypeName();
@@ -150,21 +206,26 @@ public class TypeCompiler implements ICompilerComponent {
                     return new DBSPTypeKeyword();
                 case ARRAY: {
                     RelDataType ct = Objects.requireNonNull(dt.getComponentType());
-                    DBSPType elementType = this.convertType(ct, true);
+                    DBSPType elementType = this.convertType(ct, asStruct);
                     return new DBSPTypeVec(elementType, dt.isNullable());
                 }
                 case UNKNOWN:
                 case ANY:
                     // Not sure whether this is right
                     return DBSPTypeAny.getDefault();
+                case MAP: {
+                    RelDataType kt = Objects.requireNonNull(dt.getKeyType());
+                    DBSPType keyType = this.convertType(kt, asStruct);
+                    RelDataType vt = Objects.requireNonNull(dt.getValueType());
+                    DBSPType valueType = this.convertType(vt, asStruct);
+                    return new DBSPTypeMap(keyType, valueType, dt.isNullable());
+                }
                 case MULTISET:
-                case MAP:
                 case DISTINCT:
                 case STRUCTURED:
                 case ROW:
                 case OTHER:
                 case CURSOR:
-                case COLUMN_LIST:
                 case DYNAMIC_STAR:
                 case SARG:
                 case TIME_WITH_LOCAL_TIME_ZONE:
@@ -186,13 +247,13 @@ public class TypeCompiler implements ICompilerComponent {
                 case INTERVAL_SECOND:
                     return new DBSPTypeMillisInterval(node, nullable);
                 case GEOMETRY:
-                    return new DBSPTypeGeoPoint(CalciteObject.EMPTY, nullable);
+                    return new DBSPTypeGeoPoint(node, nullable);
                 case TIMESTAMP:
-                    return new DBSPTypeTimestamp(CalciteObject.EMPTY, nullable);
+                    return new DBSPTypeTimestamp(node, nullable);
                 case DATE:
-                    return new DBSPTypeDate(CalciteObject.EMPTY, nullable);
+                    return new DBSPTypeDate(node, nullable);
                 case TIME:
-                    return new DBSPTypeTime(CalciteObject.EMPTY, nullable);
+                    return new DBSPTypeTime(node, nullable);
             }
         }
         throw new UnimplementedException(node);

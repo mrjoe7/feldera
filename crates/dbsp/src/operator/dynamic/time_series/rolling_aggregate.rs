@@ -1,12 +1,12 @@
 use crate::{
-    algebra::{HasOne, HasZero, IndexedZSet, ZRingValue},
+    algebra::{HasOne, HasZero, IndexedZSet, UnsignedPrimInt, ZRingValue},
     circuit::{
         operator_traits::{Operator, QuaternaryOperator},
         Scope,
     },
     dynamic::{
-        ClonableTrait, DataTrait, DynDataTyped, DynOpt, DynPair, DynUnit, Erase, Factory,
-        WeightTrait, WithFactory,
+        ClonableTrait, DataTrait, DowncastTrait, DynDataTyped, DynOpt, DynPair, DynUnit, Erase,
+        Factory, WeightTrait, WithFactory,
     },
     operator::{
         dynamic::{
@@ -30,14 +30,14 @@ use crate::{
     Circuit, DBData, DBWeight, DynZWeight, RootCircuit, Stream, ZWeight,
 };
 use dyn_clone::{clone_box, DynClone};
-use num::{Bounded, PrimInt};
+use num::Bounded;
 use std::{
     borrow::Cow,
     marker::PhantomData,
     ops::{Deref, Div, Neg},
 };
 
-use super::radix_tree::{OrdPartitionedRadixTreeFactories, Prefix};
+use super::radix_tree::{FilePartitionedRadixTreeFactories, Prefix};
 
 pub trait WeighFunc<V: ?Sized, R: ?Sized, A: ?Sized>: Fn(&V, &R, &mut A) + DynClone {}
 
@@ -65,11 +65,11 @@ where
     O: IndexedZSet<Key = B::Key>,
     Acc: DataTrait + ?Sized,
     Out: DataTrait + ?Sized,
-    TS: DBData + PrimInt,
+    TS: DBData + UnsignedPrimInt,
     V: DataTrait + ?Sized,
 {
     input_factories: B::Factories,
-    radix_tree_factories: OrdPartitionedRadixTreeFactories<B::Key, TS, Acc>,
+    radix_tree_factories: FilePartitionedRadixTreeFactories<B::Key, TS, Acc>,
     partitioned_tree_aggregate_factories: OrdPartitionedTreeAggregateFactories<TS, V, B, Acc>,
     output_factories: O::Factories,
     phantom: PhantomData<fn(&Out)>,
@@ -81,7 +81,7 @@ where
     O: PartitionedIndexedZSet<DynDataTyped<TS>, DynOpt<Out>, Key = B::Key>,
     Acc: DataTrait + ?Sized,
     Out: DataTrait + ?Sized,
-    TS: DBData + PrimInt,
+    TS: DBData + UnsignedPrimInt,
     V: DataTrait + ?Sized,
 {
     pub fn new<KType, VType, AType, OType>() -> Self
@@ -113,8 +113,8 @@ where
 pub struct PartitionedRollingAggregateWithWaterlineFactories<PK, TS, V, Acc, Out, B>
 where
     PK: DataTrait + ?Sized,
-    B: IndexedZSet<Key = DynDataTyped<TS>>,
-    TS: DBData + PrimInt,
+    B: IndexedZSet,
+    TS: DBData + UnsignedPrimInt + Erase<B::Key>,
     Acc: DataTrait + ?Sized,
     Out: DataTrait + ?Sized,
     V: DataTrait + ?Sized,
@@ -134,15 +134,14 @@ impl<PK, TS, V, Acc, Out, B>
     PartitionedRollingAggregateWithWaterlineFactories<PK, TS, V, Acc, Out, B>
 where
     PK: DataTrait + ?Sized,
-    B: IndexedZSet<Key = DynDataTyped<TS>>,
-    TS: DBData + PrimInt,
+    B: IndexedZSet,
+    TS: DBData + UnsignedPrimInt + Erase<B::Key>,
     Acc: DataTrait + ?Sized,
     Out: DataTrait + ?Sized,
     V: DataTrait + ?Sized,
 {
-    pub fn new<KType, VType, PKType, PVType, AType, OType>() -> Self
+    pub fn new<VType, PKType, PVType, AType, OType>() -> Self
     where
-        KType: DBData + Erase<B::Key>,
         VType: DBData + Erase<B::Val>,
         PKType: DBData + Erase<PK>,
         PVType: DBData + Erase<V>,
@@ -150,7 +149,7 @@ where
         OType: DBData + Erase<Out>,
     {
         Self {
-            input_factories: BatchReaderFactories::new::<KType, VType, ZWeight>(),
+            input_factories: BatchReaderFactories::new::<TS, VType, ZWeight>(),
             rolling_aggregate_factories: PartitionedRollingAggregateFactories::new::<
                 PKType,
                 PVType,
@@ -165,7 +164,7 @@ pub struct PartitionedRollingAggregateLinearFactories<TS, V, OV, A, B, O>
 where
     B: PartitionedIndexedZSet<DynDataTyped<TS>, V>,
     O: IndexedZSet<Key = B::Key>,
-    TS: DBData + PrimInt,
+    TS: DBData + UnsignedPrimInt,
     V: DataTrait + ?Sized,
     OV: DataTrait + ?Sized,
     A: WeightTrait + ?Sized,
@@ -181,7 +180,7 @@ where
     B: PartitionedIndexedZSet<DynDataTyped<TS>, V>,
     O: PartitionedIndexedZSet<DynDataTyped<TS>, DynOpt<OV>, Key = B::Key>,
     B::Key: DataTrait,
-    TS: DBData + PrimInt,
+    TS: DBData + UnsignedPrimInt,
     V: DataTrait + ?Sized,
     OV: DataTrait + ?Sized,
     A: WeightTrait + ?Sized,
@@ -211,7 +210,7 @@ pub struct PartitionedRollingAverageFactories<TS, V, W, B, O>
 where
     B: PartitionedIndexedZSet<DynDataTyped<TS>, V>,
     O: IndexedZSet<Key = B::Key>,
-    TS: DBData + PrimInt,
+    TS: DBData + UnsignedPrimInt,
     V: DataTrait + ?Sized,
     W: WeightTrait + ?Sized,
 {
@@ -224,7 +223,7 @@ impl<TS, V, W, B, O> PartitionedRollingAverageFactories<TS, V, W, B, O>
 where
     B: PartitionedIndexedZSet<DynDataTyped<TS>, V>,
     O: PartitionedIndexedZSet<DynDataTyped<TS>, DynOpt<V>, Key = B::Key>,
-    TS: DBData + PrimInt,
+    TS: DBData + UnsignedPrimInt,
     V: DataTrait + ?Sized,
     W: WeightTrait + ?Sized,
 {
@@ -372,12 +371,13 @@ where
         range: RelRange<TS>,
     ) -> OrdPartitionedOverStream<PK, DynDataTyped<TS>, Out>
     where
-        B: IndexedZSet<Key = DynDataTyped<TS>>,
+        B: IndexedZSet,
         B: for<'a> DynFilterMap<
-            DynItemRef<'a> = (&'a DynDataTyped<TS>, &'a <B as BatchReader>::Val),
+            DynItemRef<'a> = (&'a <B as BatchReader>::Key, &'a <B as BatchReader>::Val),
         >,
+        Box<B::Key>: Clone,
         PK: DataTrait + ?Sized,
-        TS: DBData + PrimInt,
+        TS: DBData + UnsignedPrimInt + Erase<B::Key>,
         V: DataTrait + ?Sized,
         Acc: DataTrait + ?Sized,
         Out: DataTrait + ?Sized,
@@ -386,7 +386,7 @@ where
             .region("partitioned_rolling_aggregate_with_waterline", || {
                 // Shift the aggregation window so that its right end is at 0.
                 let shifted_range =
-                    RelRange::new(range.from - range.to, RelOffset::Before(TS::zero()));
+                    RelRange::new(range.from - range.to, RelOffset::Before(HasZero::zero()));
 
                 // Trace bound used inside `partitioned_rolling_aggregate_inner` to
                 // bound its output trace.  This is the same bound we use to construct
@@ -430,7 +430,7 @@ where
                         let (partition_key, ts_val) = res.split_mut();
                         let (res_ts, val) = ts_val.split_mut();
                         partition_func_clone(v, partition_key, val);
-                        ts.clone_to(res_ts);
+                        unsafe { *res_ts.downcast_mut::<TS>() = *ts.downcast::<TS>() };
                     }),
                 );
                 let partitioned_self = self.dyn_map_index(
@@ -439,7 +439,7 @@ where
                         let (partition_key, ts_val) = res.split_mut();
                         let (res_ts, val) = ts_val.split_mut();
                         partition_func(v, partition_key, val);
-                        ts.clone_to(res_ts);
+                        unsafe { *res_ts.downcast_mut::<TS>() = *ts.downcast::<TS>() };
                     }),
                 );
 
@@ -452,49 +452,32 @@ where
                 )
             })
     }
-}
 
-impl<B> Stream<RootCircuit, B> {
-    /// See [`Stream::partitioned_rolling_aggregate`].
-    pub fn dyn_partitioned_rolling_aggregate<TS, V, Acc, Out>(
+    /// Like [`Self::dyn_partitioned_rolling_aggregate`], but can return any
+    /// batch type.
+    pub fn dyn_partitioned_rolling_aggregate<PK, TS, V, Acc, Out>(
         &self,
         factories: &PartitionedRollingAggregateFactories<
             TS,
             V,
             Acc,
             Out,
-            B,
-            OrdPartitionedIndexedZSet<B::Key, DynDataTyped<TS>, DynOpt<Out>>,
+            OrdPartitionedIndexedZSet<PK, DynDataTyped<TS>, V>,
+            OrdPartitionedIndexedZSet<PK, DynDataTyped<TS>, DynOpt<Out>>,
         >,
+        partition_func: Box<dyn PartitionFunc<B::Val, PK, V>>,
         aggregator: &dyn DynAggregator<V, (), B::R, Accumulator = Acc, Output = Out>,
         range: RelRange<TS>,
-    ) -> OrdPartitionedOverStream<B::Key, DynDataTyped<TS>, Out>
+    ) -> OrdPartitionedOverStream<PK, DynDataTyped<TS>, Out>
     where
-        B: PartitionedIndexedZSet<DynDataTyped<TS>, V> + Send,
+        B: IndexedZSet,
+        B: for<'a> DynFilterMap<
+            DynItemRef<'a> = (&'a <B as BatchReader>::Key, &'a <B as BatchReader>::Val),
+        >,
         Acc: DataTrait + ?Sized,
         Out: DataTrait + ?Sized,
-        TS: DBData + PrimInt,
-        V: DataTrait + ?Sized,
-    {
-        self.dyn_partitioned_rolling_aggregate_generic::<TS, V, Acc, Out, _>(
-            factories, aggregator, range,
-        )
-    }
-
-    /// Like [`Self::dyn_partitioned_rolling_aggregate`], but can return any
-    /// batch type.
-    pub fn dyn_partitioned_rolling_aggregate_generic<TS, V, Acc, Out, O>(
-        &self,
-        factories: &PartitionedRollingAggregateFactories<TS, V, Acc, Out, B, O>,
-        aggregator: &dyn DynAggregator<V, (), B::R, Accumulator = Acc, Output = Out>,
-        range: RelRange<TS>,
-    ) -> Stream<RootCircuit, O>
-    where
-        B: PartitionedIndexedZSet<DynDataTyped<TS>, V> + Send,
-        Acc: DataTrait + ?Sized,
-        Out: DataTrait + ?Sized,
-        O: PartitionedIndexedZSet<DynDataTyped<TS>, DynOpt<Out>, Key = B::Key>,
-        TS: DBData + PrimInt,
+        PK: DataTrait + ?Sized,
+        TS: DBData + UnsignedPrimInt + Erase<B::Key>,
         V: DataTrait + ?Sized,
     {
         // ```
@@ -512,9 +495,19 @@ impl<B> Stream<RootCircuit, B> {
         //                                                                   delayed_trace └────┘
         // ```
         self.circuit().region("partitioned_rolling_aggregate", || {
-            self.dyn_partitioned_rolling_aggregate_inner(
+            let partitioned = self.dyn_map_index(
+                &factories.input_factories,
+                Box::new(move |(ts, v), res| {
+                    let (partition_key, ts_val) = res.split_mut();
+                    let (res_ts, val) = ts_val.split_mut();
+                    partition_func(v, partition_key, val);
+                    unsafe { *res_ts.downcast_mut::<TS>() = *ts.downcast::<TS>() };
+                }),
+            );
+
+            partitioned.dyn_partitioned_rolling_aggregate_inner(
                 factories,
-                self,
+                &partitioned,
                 aggregator,
                 range,
                 TraceBound::new(),
@@ -522,6 +515,93 @@ impl<B> Stream<RootCircuit, B> {
         })
     }
 
+    /// See [`Stream::partitioned_rolling_aggregate_linear`].
+    pub fn dyn_partitioned_rolling_aggregate_linear<PK, TS, V, A, O>(
+        &self,
+        factories: &PartitionedRollingAggregateLinearFactories<
+            TS,
+            V,
+            O,
+            A,
+            OrdPartitionedIndexedZSet<PK, DynDataTyped<TS>, V>,
+            OrdPartitionedIndexedZSet<PK, DynDataTyped<TS>, DynOpt<O>>,
+        >,
+        partition_func: Box<dyn PartitionFunc<B::Val, PK, V>>,
+        f: Box<dyn WeighFunc<V, B::R, A>>,
+        output_func: Box<dyn AggOutputFunc<A, O>>,
+        range: RelRange<TS>,
+    ) -> OrdPartitionedOverStream<PK, DynDataTyped<TS>, O>
+    where
+        B: IndexedZSet,
+        B: for<'a> DynFilterMap<
+            DynItemRef<'a> = (&'a <B as BatchReader>::Key, &'a <B as BatchReader>::Val),
+        >,
+        PK: DataTrait + ?Sized,
+        TS: DBData + UnsignedPrimInt + Erase<B::Key>,
+        V: DataTrait + ?Sized,
+        A: WeightTrait + ?Sized,
+        O: DataTrait + ?Sized,
+    {
+        let aggregator = LinearAggregator::new(
+            factories.aggregate_factory,
+            factories.opt_accumulator_factory,
+            factories.output_factory,
+            f,
+            output_func,
+        );
+        self.dyn_partitioned_rolling_aggregate::<PK, TS, V, _, _>(
+            &factories.rolling_aggregate_factories,
+            partition_func,
+            &aggregator,
+            range,
+        )
+    }
+
+    pub fn dyn_partitioned_rolling_average<PK, TS, V, W>(
+        &self,
+        factories: &PartitionedRollingAverageFactories<
+            TS,
+            V,
+            W,
+            OrdPartitionedIndexedZSet<PK, DynDataTyped<TS>, V>,
+            OrdPartitionedIndexedZSet<PK, DynDataTyped<TS>, DynOpt<V>>,
+        >,
+        partition_func: Box<dyn PartitionFunc<B::Val, PK, V>>,
+        f: Box<dyn WeighFunc<V, B::R, W>>,
+        out_func: Box<dyn AggOutputFunc<W, V>>,
+        range: RelRange<TS>,
+    ) -> OrdPartitionedOverStream<PK, DynDataTyped<TS>, V>
+    where
+        B: IndexedZSet,
+        B: for<'a> DynFilterMap<
+            DynItemRef<'a> = (&'a <B as BatchReader>::Key, &'a <B as BatchReader>::Val),
+        >,
+        PK: DataTrait + ?Sized,
+        TS: DBData + UnsignedPrimInt + Erase<B::Key>,
+        V: DataTrait + ?Sized,
+        W: WeightTrait + ?Sized,
+    {
+        let weight_factory = factories.weight_factory;
+        self.dyn_partitioned_rolling_aggregate_linear(
+            &factories.aggregate_factories,
+            partition_func,
+            Box::new(move |v: &V, w: &B::R, avg: &mut DynAverage<W, B::R>| {
+                let (sum, count) = avg.split_mut();
+                w.clone_to(count);
+                f(v, w, sum);
+            }),
+            Box::new(move |avg, out| {
+                weight_factory.with(&mut |avg_val| {
+                    avg.compute_avg(avg_val);
+                    out_func(avg_val, out)
+                })
+            }),
+            range,
+        )
+    }
+}
+
+impl<B> Stream<RootCircuit, B> {
     #[doc(hidden)]
     pub fn dyn_partitioned_rolling_aggregate_inner<TS, V, Acc, Out, O>(
         &self,
@@ -536,7 +616,7 @@ impl<B> Stream<RootCircuit, B> {
         O: PartitionedIndexedZSet<DynDataTyped<TS>, DynOpt<Out>, Key = B::Key>,
         Acc: DataTrait + ?Sized,
         Out: DataTrait + ?Sized,
-        TS: DBData + PrimInt,
+        TS: DBData + UnsignedPrimInt,
         V: DataTrait + ?Sized,
     {
         let circuit = self.circuit();
@@ -578,128 +658,6 @@ impl<B> Stream<RootCircuit, B> {
         feedback.connect(&output);
 
         output
-    }
-
-    /// See [`Stream::partitioned_rolling_aggregate_linear`].
-    pub fn dyn_partitioned_rolling_aggregate_linear<TS, V, A, O>(
-        &self,
-        factories: &PartitionedRollingAggregateLinearFactories<
-            TS,
-            V,
-            O,
-            A,
-            B,
-            OrdPartitionedIndexedZSet<B::Key, DynDataTyped<TS>, DynOpt<O>>,
-        >,
-        f: Box<dyn WeighFunc<V, B::R, A>>,
-        output_func: Box<dyn AggOutputFunc<A, O>>,
-        range: RelRange<TS>,
-    ) -> OrdPartitionedOverStream<B::Key, DynDataTyped<TS>, O>
-    where
-        B: PartitionedIndexedZSet<DynDataTyped<TS>, V> + Send,
-        A: WeightTrait + ?Sized,
-        TS: DBData + PrimInt,
-        V: DataTrait + ?Sized,
-        O: DataTrait + ?Sized,
-    {
-        let aggregator = LinearAggregator::new(
-            factories.aggregate_factory,
-            factories.opt_accumulator_factory,
-            factories.output_factory,
-            f,
-            output_func,
-        );
-        self.dyn_partitioned_rolling_aggregate_generic::<TS, V, _, _, _>(
-            &factories.rolling_aggregate_factories,
-            &aggregator,
-            range,
-        )
-    }
-
-    /// Like [`Self::dyn_partitioned_rolling_aggregate_linear`], but can return
-    /// any batch type.
-    pub fn dyn_partitioned_rolling_aggregate_linear_generic<TS, V, A, O, Out>(
-        &self,
-        factories: &PartitionedRollingAggregateLinearFactories<TS, V, O, A, B, Out>,
-        f: Box<dyn WeighFunc<V, B::R, A>>,
-        output_func: Box<dyn AggOutputFunc<A, O>>,
-        range: RelRange<TS>,
-    ) -> Stream<RootCircuit, Out>
-    where
-        B: PartitionedIndexedZSet<DynDataTyped<TS>, V> + Send,
-        A: WeightTrait + ?Sized,
-        TS: DBData + PrimInt,
-        V: DataTrait + ?Sized,
-        O: DataTrait + ?Sized,
-        Out: PartitionedIndexedZSet<DynDataTyped<TS>, DynOpt<O>, Key = B::Key, R = B::R>,
-    {
-        let aggregator = LinearAggregator::new(
-            factories.aggregate_factory,
-            factories.opt_accumulator_factory,
-            factories.output_factory,
-            f,
-            output_func,
-        );
-        self.dyn_partitioned_rolling_aggregate_generic::<TS, V, _, _, _>(
-            &factories.rolling_aggregate_factories,
-            &aggregator,
-            range,
-        )
-    }
-
-    /// See [`Stream::partitioned_rolling_average`].
-    pub fn dyn_partitioned_rolling_average<TS, V, W>(
-        &self,
-        factories: &PartitionedRollingAverageFactories<
-            TS,
-            V,
-            W,
-            B,
-            OrdPartitionedIndexedZSet<B::Key, DynDataTyped<TS>, DynOpt<V>>,
-        >,
-        f: Box<dyn WeighFunc<V, B::R, W>>,
-        out_func: Box<dyn AggOutputFunc<W, V>>,
-        range: RelRange<TS>,
-    ) -> OrdPartitionedOverStream<B::Key, DynDataTyped<TS>, V>
-    where
-        B: PartitionedIndexedZSet<DynDataTyped<TS>, V> + Send,
-        W: WeightTrait + ?Sized,
-        TS: DBData + PrimInt,
-        V: DataTrait + ?Sized,
-    {
-        self.dyn_partitioned_rolling_average_generic(factories, f, out_func, range)
-    }
-
-    pub fn dyn_partitioned_rolling_average_generic<TS, V, W, Out>(
-        &self,
-        factories: &PartitionedRollingAverageFactories<TS, V, W, B, Out>,
-        f: Box<dyn WeighFunc<V, B::R, W>>,
-        out_func: Box<dyn AggOutputFunc<W, V>>,
-        range: RelRange<TS>,
-    ) -> Stream<RootCircuit, Out>
-    where
-        B: PartitionedIndexedZSet<DynDataTyped<TS>, V> + Send,
-        TS: DBData + PrimInt,
-        V: DataTrait + ?Sized,
-        W: WeightTrait + ?Sized,
-        Out: PartitionedIndexedZSet<DynDataTyped<TS>, DynOpt<V>, Key = B::Key>,
-    {
-        let weight_factory = factories.weight_factory;
-        self.dyn_partitioned_rolling_aggregate_linear_generic(
-            &factories.aggregate_factories,
-            Box::new(move |v: &V, w: &B::R, avg: &mut DynAverage<W, B::R>| {
-                let (sum, count) = avg.split_mut();
-                w.clone_to(count);
-                f(v, w, sum);
-            }),
-            Box::new(move |avg, out| {
-                weight_factory.with(&mut |avg_val| {
-                    avg.compute_avg(avg_val);
-                    out_func(avg_val, out)
-                })
-            }),
-            range,
-        )
     }
 }
 
@@ -749,7 +707,7 @@ where
     fn affected_ranges<R, C>(&self, delta_cursor: &mut C) -> Ranges<TS>
     where
         C: Cursor<DynDataTyped<TS>, V, (), R>,
-        TS: DBData + PrimInt,
+        TS: DBData + UnsignedPrimInt,
         R: ?Sized,
     {
         let mut affected_ranges = Ranges::new();
@@ -790,7 +748,7 @@ where
 impl<TS, V, Acc, Out, B, T, RT, OT, O> QuaternaryOperator<B, T, RT, OT, O>
     for PartitionedRollingAggregate<TS, V, Acc, Out, O>
 where
-    TS: DBData + PrimInt,
+    TS: DBData + UnsignedPrimInt,
     V: DataTrait + ?Sized,
     Acc: DataTrait + ?Sized,
     Out: DataTrait + ?Sized,
@@ -926,15 +884,15 @@ where
 
         let retractions = retraction_builder.done();
         let insertions = insertion_builder.done();
-        retractions.add(insertions)
+        retractions.add_by_ref(&insertions)
     }
 }
 
 #[cfg(test)]
 mod test {
     use crate::{
-        algebra::DefaultSemigroup,
-        dynamic::{ClonableTrait, DowncastTrait, DynData, DynDataTyped, DynOpt, DynPair, Erase},
+        algebra::{DefaultSemigroup, UnsignedPrimInt},
+        dynamic::{DowncastTrait, DynData, DynDataTyped, DynOpt, DynPair, Erase},
         lean_vec,
         operator::{
             dynamic::{
@@ -951,7 +909,8 @@ mod test {
         trace::{BatchReaderFactories, Cursor},
         typed_batch::{BatchReader, DynBatchReader, DynOrdIndexedZSet, TypedBatch},
         utils::Tup2,
-        DBSPHandle, IndexedZSetHandle, RootCircuit, Runtime, Stream, ZWeight,
+        DBData, DBSPHandle, IndexedZSetHandle, OrdIndexedZSet, RootCircuit, Runtime, Stream,
+        TypedBox, ZWeight,
     };
     use proptest::{collection, prelude::*};
     use size_of::SizeOf;
@@ -971,6 +930,29 @@ mod test {
         >,
     >;
     type OutputStream = Stream<RootCircuit, OutputBatch>;
+
+    impl<PK, TS, V> Stream<RootCircuit, OrdIndexedZSet<PK, Tup2<TS, V>>>
+    where
+        PK: DBData,
+        TS: DBData + UnsignedPrimInt,
+        V: DBData,
+    {
+        pub fn as_partitioned_zset(
+            &self,
+        ) -> Stream<RootCircuit, OrdPartitionedIndexedZSet<PK, TS, DynDataTyped<TS>, V, DynData>>
+        {
+            let factories = BatchReaderFactories::new::<PK, Tup2<TS, V>, ZWeight>();
+
+            self.inner()
+                .dyn_map_index(
+                    &factories,
+                    Box::new(|(k, v), kv| {
+                        kv.from_refs(k, unsafe { v.downcast::<Tup2<TS, V>>().erase() })
+                    }),
+                )
+                .typed()
+        }
+    }
 
     // Reference implementation of `aggregate_range` for testing.
     fn aggregate_range_slow(batch: &DataBatch, partition: u64, range: Range<u64>) -> Option<i64> {
@@ -1042,22 +1024,12 @@ mod test {
             let (input_stream, input_handle) =
                 circuit.add_input_indexed_zset::<u64, Tup2<u64, i64>>();
 
+            let input_by_time =
+                input_stream.map_index(|(partition, Tup2(ts, val))| (*ts, Tup2(*partition, *val)));
+
             let input_stream = input_stream.as_partitioned_zset();
 
-            let input_by_time: Stream<_, TypedBatch<u64,Tup2<u64, i64>, ZWeight, _>> = input_stream
-                .inner()
-                .dyn_map_index::<DynDataTyped<u64>, _>(
-                    &BatchReaderFactories::new::<u64, Tup2<u64, i64>, ZWeight>(),
-                    Box::new(|(partition, ts_val): (&DynData, &DynPair<DynDataTyped<u64>, DynData>), kv: &mut DynPair<DynDataTyped<u64>, DynData>| {
-                        let (k, v) = kv.split_mut();
-                        let (ts, val) = ts_val.split();
-                        ts.clone_to(k);
-                        *v.downcast_mut_checked() = Tup2(*partition.downcast_checked::<u64>(), *val.downcast_checked::<i64>());
-                    }),
-                )
-                .typed();
-
-            let waterline =
+            let waterline: Stream<_, TypedBox<u64, DynDataTyped<u64>>> =
                 input_by_time.waterline_monotonic(|| 0, move |ts| ts.saturating_sub(lateness));
 
             let aggregator = <Fold<i64, i64, DefaultSemigroup<_>, _, _>>::new(
@@ -1068,8 +1040,12 @@ mod test {
             let range_spec = RelRange::new(RelOffset::Before(1000), RelOffset::Before(0));
             let expected_1000_0 =
                 partitioned_rolling_aggregate_slow(&input_stream.inner(), range_spec);
-            let output_1000_0 = input_stream
-                .partitioned_rolling_aggregate(aggregator.clone(), range_spec)
+            let output_1000_0 = input_by_time
+                .partitioned_rolling_aggregate(
+                    |Tup2(partition, val)| (*partition, *val),
+                    aggregator.clone(),
+                    range_spec,
+                )
                 .gather(0)
                 .integrate();
             expected_1000_0.apply2(&output_1000_0, |expected, actual| {
@@ -1090,8 +1066,13 @@ mod test {
                 assert_eq!(expected, actual)
             });
 
-            let output_1000_0_linear = input_stream
-                .partitioned_rolling_aggregate_linear(|v| *v, |v| v, range_spec)
+            let output_1000_0_linear = input_by_time
+                .partitioned_rolling_aggregate_linear(
+                    |Tup2(partition, val)| (*partition, *val),
+                    |v| *v,
+                    |v| v,
+                    range_spec,
+                )
                 .gather(0)
                 .integrate();
             expected_1000_0.apply2(&output_1000_0_linear, |expected, actual| {
@@ -1101,8 +1082,11 @@ mod test {
             let range_spec = RelRange::new(RelOffset::Before(500), RelOffset::After(500));
             let expected_500_500 =
                 partitioned_rolling_aggregate_slow(&input_stream.inner(), range_spec);
-            let aggregate_500_500 =
-                input_stream.partitioned_rolling_aggregate(aggregator.clone(), range_spec);
+            let aggregate_500_500 = input_by_time.partitioned_rolling_aggregate(
+                |Tup2(partition, val)| (*partition, *val),
+                aggregator.clone(),
+                range_spec,
+            );
             let output_500_500 = aggregate_500_500.gather(0).integrate();
             expected_500_500.apply2(&output_500_500, |expected, actual| {
                 assert_eq!(expected, actual)
@@ -1134,8 +1118,13 @@ mod test {
                 assert_eq!(expected, actual)
             });
 
-            let output_500_500_linear = input_stream
-                .partitioned_rolling_aggregate_linear(|v| *v, |v| v, range_spec)
+            let output_500_500_linear = input_by_time
+                .partitioned_rolling_aggregate_linear(
+                    |Tup2(partition, val)| (*partition, *val),
+                    |v| *v,
+                    |v| v,
+                    range_spec,
+                )
                 .gather(0)
                 .integrate();
             expected_500_500.apply2(&output_500_500_linear, |expected, actual| {
@@ -1145,8 +1134,12 @@ mod test {
             let range_spec = RelRange::new(RelOffset::Before(500), RelOffset::Before(100));
             let expected_500_100 =
                 partitioned_rolling_aggregate_slow(&input_stream.inner(), range_spec);
-            let output_500_100 = input_stream
-                .partitioned_rolling_aggregate(aggregator, range_spec)
+            let output_500_100 = input_by_time
+                .partitioned_rolling_aggregate(
+                    |Tup2(partition, val)| (*partition, *val),
+                    aggregator,
+                    range_spec,
+                )
                 .gather(0)
                 .integrate();
             expected_500_100.apply2(&output_500_100, |expected, actual| {
@@ -1216,22 +1209,25 @@ mod test {
     #[test]
     fn test_partitioned_rolling_aggregate2() {
         let (circuit, (input, expected)) = RootCircuit::build(move |circuit| {
-            let (input, input_handle) = circuit
-                .dyn_add_input_indexed_zset::<DynData/*<u64>*/, DynPair<DynDataTyped<u64>, DynData/*<i64>*/>>(
-                    &AddInputIndexedZSetFactories::new::<u64, Tup2<u64, i64>>(),
-                );
+            let (input_stream, input_handle) =
+                circuit.add_input_indexed_zset::<u64, Tup2<u64, i64>>();
+
             let (expected, expected_handle) =
                 circuit.dyn_add_input_indexed_zset::<DynData/*<u64>*/, DynPair<DynDataTyped<u64>, DynOpt<DynData/*<i64>*/>>>(&AddInputIndexedZSetFactories::new::<u64, Tup2<u64, Option<i64>>>());
 
-            let input = input.typed::<TypedBatch<u64,Tup2<u64,i64>,ZWeight,_>>();
+            let input_by_time =
+                input_stream.map_index(|(partition, Tup2(ts, val))| (*ts, Tup2(*partition, *val)));
 
-            input.inspect(|f| {
+            input_stream.inspect(|f| {
                 for (p, Tup2(ts, v), w) in f.iter() {
                     println!(" input {p} {ts} {v:6} {w:+}");
                 }
             });
             let range_spec = RelRange::new(RelOffset::Before(3), RelOffset::Before(2));
-            let sum = input.partitioned_rolling_aggregate_linear(|&f| f, |x| x, range_spec);
+            let sum = input_by_time.partitioned_rolling_aggregate_linear(
+                |Tup2(partition, val)| (*partition, *val),
+                |&f| f,
+                |x| x, range_spec);
             sum.inspect(|f| {
                 for (p, Tup2(ts, sum), w) in f.iter() {
                     println!("output {p} {ts} {:6} {w:+}", sum.unwrap_or_default());
@@ -1242,18 +1238,15 @@ mod test {
         })
         .unwrap();
 
-        input.dyn_append(
-            &mut Box::new(lean_vec![
-                Tup2(1u64, Tup2(Tup2(0u64, 1i64), 1)),
-                Tup2(1, Tup2(Tup2(1, 10), 1)),
-                Tup2(1, Tup2(Tup2(2, 100), 1)),
-                Tup2(1, Tup2(Tup2(3, 1000), 1)),
-                Tup2(1, Tup2(Tup2(4, 10000), 1)),
-                Tup2(1, Tup2(Tup2(5, 100000), 1)),
-                Tup2(1, Tup2(Tup2(9, 123456), 1)),
-            ])
-            .erase_box(),
-        );
+        input.append(&mut vec![
+            Tup2(1u64, Tup2(Tup2(0u64, 1i64), 1)),
+            Tup2(1, Tup2(Tup2(1, 10), 1)),
+            Tup2(1, Tup2(Tup2(2, 100), 1)),
+            Tup2(1, Tup2(Tup2(3, 1000), 1)),
+            Tup2(1, Tup2(Tup2(4, 10000), 1)),
+            Tup2(1, Tup2(Tup2(5, 100000), 1)),
+            Tup2(1, Tup2(Tup2(9, 123456), 1)),
+        ]);
         expected.dyn_append(
             &mut Box::new(lean_vec![
                 Tup2(1u64, Tup2(Tup2(0u64, None::<i64>), 1)),
@@ -1272,15 +1265,20 @@ mod test {
     #[test]
     fn test_partitioned_rolling_average() {
         let (circuit, (input, expected)) = RootCircuit::build(move |circuit| {
-            let (input_stream, input_handle) = circuit
-                .dyn_add_input_indexed_zset::<DynData/*<u64>*/, DynPair<DynDataTyped<u64>, DynData/*<i64>*/>>(&AddInputIndexedZSetFactories::new::<u64, Tup2<u64, i64>>());
+            let (input_stream, input_handle) =
+                circuit.add_input_indexed_zset::<u64, Tup2<u64, i64>>();
+
             let (expected_stream, expected_handle) =
                 circuit.dyn_add_input_indexed_zset::<DynData/*<u64>*/, DynPair<DynDataTyped<u64>, DynOpt<DynData/*<i64>*/>>>(&AddInputIndexedZSetFactories::new::<u64, Tup2<u64, Option<i64>>>());
 
+            let input_by_time =
+                input_stream.map_index(|(partition, Tup2(ts, val))| (*ts, Tup2(*partition, *val)));
+
             let range_spec = RelRange::new(RelOffset::Before(3), RelOffset::Before(1));
-            input_stream
-                .typed()
-                .partitioned_rolling_average(range_spec)
+            input_by_time
+                .partitioned_rolling_average(
+                    |Tup2(partition, val)| (*partition, *val),
+                    range_spec)
                 .apply2(&expected_stream, |avg: &OrdPartitionedIndexedZSet<u64, u64, _, Option<i64>, _>, expected| assert_eq!(avg.inner(), expected));
             Ok((input_handle, expected_handle))
         })
@@ -1288,17 +1286,14 @@ mod test {
 
         circuit.step().unwrap();
 
-        input.dyn_append(
-            &mut Box::new(lean_vec![
-                Tup2(0u64, Tup2(Tup2(10u64, 10i64), 1)),
-                Tup2(0, Tup2(Tup2(11, 20), 1)),
-                Tup2(0, Tup2(Tup2(12, 30), 1)),
-                Tup2(0, Tup2(Tup2(13, 40), 1)),
-                Tup2(0, Tup2(Tup2(14, 50), 1)),
-                Tup2(0, Tup2(Tup2(15, 60), 1)),
-            ])
-            .erase_box(),
-        );
+        input.append(&mut vec![
+            Tup2(0u64, Tup2(Tup2(10u64, 10i64), 1)),
+            Tup2(0, Tup2(Tup2(11, 20), 1)),
+            Tup2(0, Tup2(Tup2(12, 30), 1)),
+            Tup2(0, Tup2(Tup2(13, 40), 1)),
+            Tup2(0, Tup2(Tup2(14, 50), 1)),
+            Tup2(0, Tup2(Tup2(15, 60), 1)),
+        ]);
         expected.dyn_append(
             &mut Box::new(lean_vec![
                 Tup2(0u64, Tup2(Tup2(10u64, None::<i64>), 1)),
@@ -1316,20 +1311,24 @@ mod test {
     #[test]
     fn test_partitioned_rolling_aggregate() {
         let (circuit, input) = RootCircuit::build(move |circuit| {
-            let (input_stream, input_handle) = circuit
-                .dyn_add_input_indexed_zset::<DynData/*<u64>*/, DynPair<DynDataTyped<u64>, DynData/*<i64>*/>>(
-                    &AddInputIndexedZSetFactories::new::<u64, Tup2<u64, i64>>(),
-                );
-
-            let input_stream = input_stream.typed::<TypedBatch<u64, Tup2<u64, i64>, ZWeight, _>>();
+            let (input_stream, input_handle) =
+                circuit.add_input_indexed_zset::<u64, Tup2<u64, i64>>();
 
             input_stream.inspect(|f| {
                 for (p, Tup2(ts, v), w) in f.iter() {
                     println!(" input {p} {ts} {v:6} {w:+}");
                 }
             });
+            let input_by_time =
+                input_stream.map_index(|(partition, Tup2(ts, val))| (*ts, Tup2(*partition, *val)));
+
             let range_spec = RelRange::new(RelOffset::Before(3), RelOffset::Before(2));
-            let sum = input_stream.partitioned_rolling_aggregate_linear(|&f| f, |x| x, range_spec);
+            let sum = input_by_time.partitioned_rolling_aggregate_linear(
+                |Tup2(partition, val)| (*partition, *val),
+                |&f| f,
+                |x| x,
+                range_spec,
+            );
             sum.inspect(|f| {
                 for (p, Tup2(ts, sum), w) in f.iter() {
                     println!("output {p} {ts} {:6} {w:+}", sum.unwrap_or_default());
@@ -1339,18 +1338,15 @@ mod test {
         })
         .unwrap();
 
-        input.dyn_append(
-            &mut Box::new(lean_vec![
-                Tup2(1u64, Tup2(Tup2(0u64, 1i64), 1)),
-                Tup2(1, Tup2(Tup2(1, 10), 1)),
-                Tup2(1, Tup2(Tup2(2, 100), 1)),
-                Tup2(1, Tup2(Tup2(3, 1000), 1)),
-                Tup2(1, Tup2(Tup2(4, 10000), 1)),
-                Tup2(1, Tup2(Tup2(5, 100000), 1)),
-                Tup2(1, Tup2(Tup2(9, 123456), 1)),
-            ])
-            .erase_box(),
-        );
+        input.append(&mut vec![
+            Tup2(1u64, Tup2(Tup2(0u64, 1i64), 1)),
+            Tup2(1, Tup2(Tup2(1, 10), 1)),
+            Tup2(1, Tup2(Tup2(2, 100), 1)),
+            Tup2(1, Tup2(Tup2(3, 1000), 1)),
+            Tup2(1, Tup2(Tup2(4, 10000), 1)),
+            Tup2(1, Tup2(Tup2(5, 100000), 1)),
+            Tup2(1, Tup2(Tup2(9, 123456), 1)),
+        ]);
         circuit.step().unwrap();
     }
 
@@ -1412,10 +1408,9 @@ mod test {
         #![proptest_config(ProptestConfig::with_cases(5))]
 
         #[test]
-        #[cfg_attr(feature = "persistence", ignore = "takes a long time?")]
         fn proptest_partitioned_rolling_aggregate_quasi_monotone(trace in input_trace_quasi_monotone(5, 10_000, 2_000, 20, 200)) {
             // 10_000 is an empirically established bound: without GC this test needs >10KB.
-            let (mut circuit, input) = partition_rolling_aggregate_circuit(10000, Some(20_000));
+            let (mut circuit, input) = partition_rolling_aggregate_circuit(10000, Some(30_000));
 
             for mut batch in trace {
                 input.append(&mut batch);
@@ -1428,7 +1423,6 @@ mod test {
 
     proptest! {
         #[test]
-        #[cfg_attr(feature = "persistence", ignore = "takes a long time?")]
         fn proptest_partitioned_over_range_sparse(trace in input_trace(5, 1_000_000, 10, 10)) {
             let (mut circuit, input) = partition_rolling_aggregate_circuit(u64::max_value(), None);
 
@@ -1441,7 +1435,6 @@ mod test {
         }
 
         #[test]
-        #[cfg_attr(feature = "persistence", ignore = "takes a long time?")]
         fn proptest_partitioned_over_range_dense(trace in input_trace(5, 500, 25, 10)) {
             let (mut circuit, input) = partition_rolling_aggregate_circuit(u64::max_value(), None);
 

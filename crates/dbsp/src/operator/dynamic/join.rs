@@ -129,8 +129,8 @@ where
 {
     pub left_factories: I1::Factories,
     pub right_factories: I2::Factories,
-    pub left_trace_factories: <T::OrdValBatch<I1::Key, I1::Val, I1::R> as BatchReader>::Factories,
-    pub right_trace_factories: <T::OrdValBatch<I1::Key, I2::Val, I1::R> as BatchReader>::Factories,
+    pub left_trace_factories: <T::FileValBatch<I1::Key, I1::Val, I1::R> as BatchReader>::Factories,
+    pub right_trace_factories: <T::FileValBatch<I1::Key, I2::Val, I1::R> as BatchReader>::Factories,
     pub output_factories: O::Factories,
     pub timed_item_factory:
         &'static dyn Factory<DynPair<DynDataTyped<T>, WeightedItem<O::Key, O::Val, O::R>>>,
@@ -507,41 +507,43 @@ where
         // The advantage of this representation is that each term can be computed
         // as a join of one of the input streams with the trace of the other stream,
         // implemented by the `JoinTrace` operator.
-        let left = self.dyn_shard(&factories.left_factories);
-        let right = other.dyn_shard(&factories.right_factories);
+        self.circuit().region("join", || {
+            let left = self.dyn_shard(&factories.left_factories);
+            let right = other.dyn_shard(&factories.right_factories);
 
-        let left_trace = left.dyn_trace(&factories.left_trace_factories);
-        let right_trace = right.dyn_trace(&factories.right_trace_factories);
+            let left_trace = left.dyn_trace(&factories.left_trace_factories);
+            let right_trace = right.dyn_trace(&factories.right_trace_factories);
 
-        let left = self.circuit().add_binary_operator(
-            JoinTrace::new(
-                &factories.right_trace_factories,
-                &factories.output_factories,
-                factories.timed_item_factory,
-                factories.timed_items_factory,
-                join_funcs.left,
-                Location::caller(),
-                self.circuit().clone(),
-            ),
-            &left,
-            &right_trace,
-        );
+            let left = self.circuit().add_binary_operator(
+                JoinTrace::new(
+                    &factories.right_trace_factories,
+                    &factories.output_factories,
+                    factories.timed_item_factory,
+                    factories.timed_items_factory,
+                    join_funcs.left,
+                    Location::caller(),
+                    self.circuit().clone(),
+                ),
+                &left,
+                &right_trace,
+            );
 
-        let right = self.circuit().add_binary_operator(
-            JoinTrace::new(
-                &factories.left_trace_factories,
-                &factories.output_factories,
-                factories.timed_item_factory,
-                factories.timed_items_factory,
-                join_funcs.right,
-                Location::caller(),
-                self.circuit().clone(),
-            ),
-            &right,
-            &left_trace.delay_trace(),
-        );
+            let right = self.circuit().add_binary_operator(
+                JoinTrace::new(
+                    &factories.left_trace_factories,
+                    &factories.output_factories,
+                    factories.timed_item_factory,
+                    factories.timed_items_factory,
+                    join_funcs.right,
+                    Location::caller(),
+                    self.circuit().clone(),
+                ),
+                &right,
+                &left_trace.delay_trace(),
+            );
 
-        left.plus(&right)
+            left.plus(&right)
+        })
     }
 
     /// See [`Stream::antijoin`].
@@ -562,32 +564,34 @@ where
                     other.origin_node_id().clone(),
                 )),
                 move || {
-                    let stream1 = self.dyn_shard(&factories.join_factories.left_factories);
-                    let stream2 = other
-                        .dyn_distinct(&factories.distinct_factories)
-                        .dyn_shard(&factories.join_factories.right_factories);
+                    self.circuit().region("antijoin", || {
+                        let stream1 = self.dyn_shard(&factories.join_factories.left_factories);
+                        let stream2 = other
+                            .dyn_distinct(&factories.distinct_factories)
+                            .dyn_shard(&factories.join_factories.right_factories);
 
-                    let mut key = factories
-                        .join_factories
-                        .output_factories
-                        .key_factory()
-                        .default_box();
-                    let mut val = factories
-                        .join_factories
-                        .output_factories
-                        .val_factory()
-                        .default_box();
-                    stream1
-                        .minus(&stream1.dyn_join_generic(
-                            &factories.join_factories,
-                            &stream2,
-                            TraceJoinFuncs::new(move |k: &I1::Key, v1: &I1::Val, _v2, cb| {
-                                k.clone_to(&mut key);
-                                v1.clone_to(&mut val);
-                                cb(key.as_mut(), val.as_mut())
-                            }),
-                        ))
-                        .mark_sharded()
+                        let mut key = factories
+                            .join_factories
+                            .output_factories
+                            .key_factory()
+                            .default_box();
+                        let mut val = factories
+                            .join_factories
+                            .output_factories
+                            .val_factory()
+                            .default_box();
+                        stream1
+                            .minus(&stream1.dyn_join_generic(
+                                &factories.join_factories,
+                                &stream2,
+                                TraceJoinFuncs::new(move |k: &I1::Key, v1: &I1::Val, _v2, cb| {
+                                    k.clone_to(&mut key);
+                                    v1.clone_to(&mut val);
+                                    cb(key.as_mut(), val.as_mut())
+                                }),
+                            ))
+                            .mark_sharded()
+                    })
                 },
             )
             .clone()
@@ -1205,7 +1209,7 @@ mod test {
         operator::{DelayedFeedback, Generator},
         typed_batch::{OrdIndexedZSet, OrdZSet, Spine},
         utils::Tup2,
-        zset, Circuit, RootCircuit, Runtime, Stream, Timestamp,
+        zset, Circuit, FallbackZSet, RootCircuit, Runtime, Stream, Timestamp,
     };
     use rkyv::{Archive, Deserialize, Serialize};
     use size_of::SizeOf;
@@ -1293,9 +1297,32 @@ mod test {
                 },
                 zset! {},
             ];
+            let inc_filtered_outputs_vec = vec![
+                zset! {
+                    Tup2(2, "c g".to_string()) => 9,
+                    Tup2(2, "c h".to_string()) => 12,
+                    Tup2(2, "d g".to_string()) => 12,
+                    Tup2(2, "d h".to_string()) => 16,
+                    Tup2(3, "e i".to_string()) => 25,
+                    Tup2(3, "e j".to_string()) => -10,
+                    Tup2(3, "f i".to_string()) => -10,
+                    Tup2(3, "f j".to_string()) => 4
+                },
+                zset! {
+                    Tup2(1, "b b".to_string()) => 2,
+                },
+                zset! {},
+                zset! {
+                    Tup2(4, "n k".to_string()) => 10,
+                    Tup2(4, "n l".to_string()) => -4,
+                    Tup2(4, "n m".to_string()) => 2,
+                },
+                zset! {},
+            ];
 
             //let mut inc_outputs = inc_outputs_vec.clone().into_iter();
             let mut inc_outputs2 = inc_outputs_vec.into_iter();
+            let mut inc_filtered_outputs = inc_filtered_outputs_vec.into_iter();
 
             let index1: Stream<_, OrdIndexedZSet<u64, String>> = circuit
                 .add_source(Generator::new(move || {
@@ -1344,6 +1371,22 @@ mod test {
                         assert_eq!(fm, &inc_outputs2.next().unwrap())
                     }
                 });
+
+            index1
+                .join_flatmap(&index2, |&k: &u64, s1, s2| {
+                    if s1.as_str() == "a" {
+                        None
+                    } else {
+                        Some(Tup2(k, format!("{} {}", s1, s2)))
+                    }
+                })
+                .gather(0)
+                .inspect(move |fm: &OrdZSet<Tup2<u64, String>>| {
+                    if Runtime::worker_index() == 0 {
+                        assert_eq!(fm, &inc_filtered_outputs.next().unwrap())
+                    }
+                });
+
             Ok(())
         })
         .unwrap()
@@ -1357,7 +1400,8 @@ mod test {
     fn do_join_test_mt(workers: usize) {
         let hruntime = Runtime::run(workers, || {
             join_test();
-        });
+        })
+        .expect("failed to run test");
 
         hruntime.join().unwrap();
     }
@@ -1529,7 +1573,7 @@ mod test {
                     .integrate_trace()
                     .inner()
                     .export()
-                    .typed::<Spine<OrdZSet<Label>>>())
+                    .typed::<Spine<FallbackZSet<Label>>>())
             })
             .unwrap();
 
@@ -1669,10 +1713,10 @@ mod test {
                 },
                     // FIXME: make sure the `export` API works on typed streams correctly,
                     // so that the `inner`/`typed` calls below are not needed.
-                result.integrate_trace().inner().export().typed::<Spine<OrdZSet<Label>>>()))
+                result.integrate_trace().inner().export().typed::<Spine<FallbackZSet<Label>>>()))
             }).unwrap();
 
-            result.consolidate().inspect(move |res: &OrdZSet<Label>| {
+            result.consolidate().inspect(move |res: &FallbackZSet<Label>| {
                 assert_eq!(*res, outputs.next().unwrap());
             });
             Ok(())

@@ -24,12 +24,14 @@
 package org.dbsp.sqlCompiler.compiler.sql.simple;
 
 import org.dbsp.sqlCompiler.compiler.DBSPCompiler;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.compiler.sql.BaseSQLTests;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI32Literal;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI64Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIntervalMillisLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIntervalMonthsLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPStringLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPTimestampLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPZSetLiteral;
@@ -60,6 +62,66 @@ public class TimeTests extends BaseSQLTests {
 
     public Change createInput() {
         return new Change(new DBSPZSetLiteral(new DBSPTupleExpression(new DBSPTimestampLiteral(100))));
+    }
+
+    @Test
+    public void issue1843() {
+        String sql = """
+                create table credit_card_transactions(transaction_time timestamp);
+                
+                create table my_timer(t timestamp);\s
+                
+                create view recent_transactions as
+                SELECT * FROM credit_card_transactions
+                WHERE transaction_time >= (SELECT t FROM my_timer) - INTERVAL 1 DAY;""";
+        this.compileRustTestCase(sql);
+    }
+
+    @Test
+    public void issue1844() {
+        String sql = """
+                create table credit_card_transactions(transaction_time timestamp);
+                create table my_timer(id int primary key, t timestamp);\s
+                
+                create view recent_transactions as
+                SELECT * FROM credit_card_transactions
+                WHERE transaction_time >= (SELECT DATE_SUB(t, INTERVAL 1 DAY) FROM my_timer);""";
+        this.compileRustTestCase(sql);
+    }
+
+    @Test
+    public void testInterval() {
+        this.testQuery("SELECT INTERVAL '20' YEAR",
+                new DBSPIntervalMonthsLiteral(240));
+        this.testQuery("SELECT INTERVAL '20-7' YEAR TO MONTH",
+                new DBSPIntervalMonthsLiteral(247));
+        this.testQuery("SELECT INTERVAL '10' MONTH",
+                new DBSPIntervalMonthsLiteral(10));
+        this.testQuery("SELECT INTERVAL '10' DAY",
+                new DBSPIntervalMillisLiteral(10L * 86400 * 1000, false));
+        this.testQuery("SELECT INTERVAL '10 10' DAY TO HOUR",
+                new DBSPIntervalMillisLiteral(10L * 86400 * 1000 + 10 * 3600 * 1000, false));
+        this.testQuery("SELECT INTERVAL '10 10:30' DAY TO MINUTE",
+                new DBSPIntervalMillisLiteral(10L * 86400 * 1000 + 10 * 3600 * 1000 + 30 * 60 * 1000, false));
+        this.testQuery("SELECT INTERVAL '10 10:30:40.999' DAY TO SECOND",
+                new DBSPIntervalMillisLiteral(
+                        10L * 86400 * 1000 + 10 * 3600 * 1000 + 30 * 60 * 1000 + 40999, false));
+        this.testQuery("SELECT INTERVAL '12' HOUR",
+                new DBSPIntervalMillisLiteral(12L * 3600 * 1000, false));
+        this.testQuery("SELECT INTERVAL '12:10' HOUR TO MINUTE",
+                new DBSPIntervalMillisLiteral(12L * 3600 * 1000 + 10 * 60 * 1000, false));
+        this.testQuery("SELECT INTERVAL '12:10:59' HOUR TO SECOND",
+                new DBSPIntervalMillisLiteral(12L * 3600 * 1000 + 10 * 60 * 1000 + 59000, false));
+        this.testQuery("SELECT INTERVAL '10' MINUTE",
+                new DBSPIntervalMillisLiteral(10L * 60 * 1000, false));
+        this.testQuery("SELECT INTERVAL '80:01.001' MINUTE TO SECOND",
+                new DBSPIntervalMillisLiteral(80L * 60 * 1000 + 1001, false));
+        this.testQuery("SELECT INTERVAL '80.001' SECOND",
+                new DBSPIntervalMillisLiteral(80001, false));
+        this.testQuery("SELECT INTERVAL '100' HOUR(3)",
+                new DBSPIntervalMillisLiteral(100L * 3600 * 1000, false));
+        this.testQuery("SELECT INTERVAL '-1 2:03:04' DAYS TO SECONDS",
+                new DBSPIntervalMillisLiteral(-(86400L * 1000 + 2 * 3600 * 1000 + 3 * 60 * 1000 + 4000), false));
     }
 
     @Test

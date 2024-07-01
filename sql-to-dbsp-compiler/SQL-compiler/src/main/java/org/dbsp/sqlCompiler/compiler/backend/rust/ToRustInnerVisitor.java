@@ -24,46 +24,124 @@
 package org.dbsp.sqlCompiler.compiler.backend.rust;
 
 import org.apache.calcite.util.TimeString;
+import org.dbsp.sqlCompiler.compiler.CompilerOptions;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
+import org.dbsp.sqlCompiler.compiler.errors.UnsupportedException;
 import org.dbsp.sqlCompiler.compiler.visitors.VisitDecision;
 import org.dbsp.sqlCompiler.compiler.visitors.inner.InnerVisitor;
-import org.dbsp.sqlCompiler.ir.*;
-import org.dbsp.sqlCompiler.ir.expression.*;
-import org.dbsp.sqlCompiler.ir.expression.literal.*;
+import org.dbsp.sqlCompiler.ir.DBSPAggregate;
+import org.dbsp.sqlCompiler.ir.DBSPFunction;
+import org.dbsp.sqlCompiler.ir.DBSPParameter;
+import org.dbsp.sqlCompiler.ir.IDBSPInnerNode;
+import org.dbsp.sqlCompiler.ir.expression.DBSPApplyExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPApplyMethodExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPAsExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPAssignmentExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPBinaryExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPBlockExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPBorrowExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPCastExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPCloneExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPClosureExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPConditionalAggregateExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPConstructorExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPDerefExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPEnumValue;
+import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPFieldComparatorExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPFieldExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPForExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPIfExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPIsNullExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPOpcode;
+import org.dbsp.sqlCompiler.ir.expression.DBSPPathExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPQualifyTypeExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPQuestionExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPRawTupleExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPSomeExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPSortExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPUnaryExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPUnsignedUnwrapExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPUnsignedWrapExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPUnwrapExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPVariablePath;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPBinaryLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPBoolLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPDateLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPDecimalLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPDoubleLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPGeoPointLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI128Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI16Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI32Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI64Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPI8Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPISizeLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIndexedZSetLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIntervalMillisLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIntervalMonthsLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPMapLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPNullLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPRealLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPStrLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPStringLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPTimeLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPTimestampLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU128Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU16Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU32Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPU64Literal;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPUSizeLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPVecLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPZSetLiteral;
 import org.dbsp.sqlCompiler.ir.path.DBSPPath;
 import org.dbsp.sqlCompiler.ir.path.DBSPPathSegment;
 import org.dbsp.sqlCompiler.ir.path.DBSPSimplePathSegment;
-import org.dbsp.sqlCompiler.ir.pattern.*;
+import org.dbsp.sqlCompiler.ir.pattern.DBSPIdentifierPattern;
 import org.dbsp.sqlCompiler.ir.statement.DBSPComment;
 import org.dbsp.sqlCompiler.ir.statement.DBSPConstItem;
 import org.dbsp.sqlCompiler.ir.statement.DBSPExpressionStatement;
 import org.dbsp.sqlCompiler.ir.statement.DBSPLetStatement;
 import org.dbsp.sqlCompiler.ir.statement.DBSPStatement;
 import org.dbsp.sqlCompiler.ir.statement.DBSPStructItem;
-import org.dbsp.sqlCompiler.ir.type.*;
-import org.dbsp.sqlCompiler.ir.type.primitive.*;
+import org.dbsp.sqlCompiler.ir.type.DBSPType;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeCode;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeFunction;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeRawTuple;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeRef;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeStruct;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBaseType;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeDecimal;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeString;
+import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeVoid;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeMap;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeStream;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeUser;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeVec;
 import org.dbsp.util.IndentStream;
-import org.dbsp.sqlCompiler.compiler.errors.UnsupportedException;
 import org.dbsp.util.Utilities;
 
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * This visitor generate a Rust implementation of the program.
- */
+/** This visitor generates a Rust implementation of the program. */
 public class ToRustInnerVisitor extends InnerVisitor {
     protected final IndentStream builder;
-    /**
-     * If set use a more compact display, which is not necessarily compilable.
-     */
+    /** If set use a more compact display, which is not necessarily compilable. */
     protected final boolean compact;
+    protected final CompilerOptions options;
 
-    public ToRustInnerVisitor(IErrorReporter reporter, IndentStream builder, boolean compact) {
+    public ToRustInnerVisitor(IErrorReporter reporter, IndentStream builder,
+                              CompilerOptions options, boolean compact) {
         super(reporter);
         this.builder = builder;
         this.compact = compact;
+        this.options = options;
     }
 
     @SuppressWarnings("SameReturnValue")
@@ -127,6 +205,53 @@ public class ToRustInnerVisitor extends InnerVisitor {
         this.builder.append("Some(");
         expression.expression.accept(this);
         this.builder.append(")");
+        return VisitDecision.STOP;
+    }
+
+    void codegen(DBSPUnsignedWrapExpression.TypeSequence sequence) {
+        this.builder.append("<");
+        // In the type parameter we do not put the Option<>
+        sequence.dataType.setMayBeNull(false).accept(this);
+        this.builder.append(", ");
+        sequence.dataConvertedType.accept(this);
+        this.builder.append(", ");
+        sequence.intermediateType.accept(this);
+        this.builder.append(", ");
+        sequence.unsignedType.accept(this);
+        this.builder.append(">");
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPUnsignedWrapExpression expression) {
+        this.builder.append("UnsignedWrapper")
+                .append("::")
+                .append(expression.getMethod())
+                .append("::");
+        this.codegen(expression.sequence);
+        this.builder.append("(");
+        expression.source.accept(this);
+        this.builder.append(", ")
+                .append(Boolean.toString(expression.ascending))
+                .append(", ")
+                .append(Boolean.toString(expression.nullsLast))
+                .append(")");
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPUnsignedUnwrapExpression expression) {
+        this.builder.append("UnsignedWrapper")
+                .append("::")
+                .append(expression.getMethod())
+                .append("::");
+        this.codegen(expression.sequence);
+        this.builder.append("(");
+        expression.source.accept(this);
+        this.builder.append(", ")
+                .append(Boolean.toString(expression.ascending))
+                .append(", ")
+                .append(Boolean.toString(expression.nullsLast))
+                .append(")");
         return VisitDecision.STOP;
     }
 
@@ -267,6 +392,28 @@ public class ToRustInnerVisitor extends InnerVisitor {
             this.builder.append(", ");
         }
         this.builder.decrease().append(")");
+        if (literal.mayBeNull())
+            this.builder.append(")");
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPMapLiteral literal) {
+        if (literal.isNull)
+            return this.doNull(literal);
+        if (literal.mayBeNull())
+            this.builder.append("Some(");
+        this.builder.append("BTreeMap::from([")
+                .increase();
+        assert literal.values != null;
+        for (int i = 0; i < Objects.requireNonNull(literal.keys).size(); i++) {
+            this.builder.append("(");
+            literal.keys.get(i).accept(this);
+            this.builder.append(", ");
+            literal.values.get(i).accept(this);
+            this.builder.append("), ");
+        }
+        this.builder.decrease().append("])");
         if (literal.mayBeNull())
             this.builder.append(")");
         return VisitDecision.STOP;
@@ -420,8 +567,15 @@ public class ToRustInnerVisitor extends InnerVisitor {
     }
 
     @Override
-    public VisitDecision preorder(DBSPU32Literal literal) {
+    public VisitDecision preorder(DBSPU16Literal literal) {
         String val = Integer.toString(Objects.requireNonNull(literal.value));
+        this.builder.append(literal.wrapSome(val + literal.getIntegerType().getRustString()));
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPU32Literal literal) {
+        String val = Long.toString(Objects.requireNonNull(literal.value));
         this.builder.append(literal.wrapSome(val + literal.getIntegerType().getRustString()));
         return VisitDecision.STOP;
     }
@@ -436,8 +590,24 @@ public class ToRustInnerVisitor extends InnerVisitor {
     }
 
     @Override
+    public VisitDecision preorder(DBSPI128Literal literal) {
+        if (literal.isNull)
+            return this.doNull(literal);
+        String val = Objects.requireNonNull(literal.value).toString();
+        this.builder.append(literal.wrapSome(val + literal.getIntegerType().getRustString()));
+        return VisitDecision.STOP;
+    }
+
+    @Override
     public VisitDecision preorder(DBSPU64Literal literal) {
-        String val = Long.toString(Objects.requireNonNull(literal.value));
+        String val = Objects.requireNonNull(literal.value).toString();
+        this.builder.append(literal.wrapSome(val + literal.getIntegerType().getRustString()));
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPU128Literal literal) {
+        String val = Objects.requireNonNull(literal.value).toString();
         this.builder.append(literal.wrapSome(val + literal.getIntegerType().getRustString()));
         return VisitDecision.STOP;
     }
@@ -493,11 +663,9 @@ public class ToRustInnerVisitor extends InnerVisitor {
 
     @Override
     public VisitDecision preorder(DBSPCastExpression expression) {
-        /*
-         * Default implementation of cast of a source expression to the 'this' type.
+        /* Default implementation of cast of a source expression to the 'this' type.
          * For example, to cast source which is an Option[i16] to a bool
-         * the function called will be cast_to_b_i16N.
-         */
+         * the function called will be cast_to_b_i16N. */
         DBSPType destType = expression.getType();
         DBSPType sourceType = expression.source.getType();
         if (destType.sameType(sourceType)) {
@@ -513,11 +681,13 @@ public class ToRustInnerVisitor extends InnerVisitor {
                 throw new UnsupportedException("Cast from " + sourceType + " to " + destType, expression.getNode());
             // TODO: This should probably be handled in Simplify
             if (destVec.getElementType().sameType(sourceVec.getElementType()) &&
-                destVec.mayBeNull && !sourceVec.mayBeNull)
+                destVec.mayBeNull && !sourceVec.mayBeNull) {
+                // TODO: This can happen when source is an empty vector literal with unknown type.
+                // Can anything else happen?
                 expression.source.some().accept(this);
-            // TODO: This can happen when source is an empty vector literal with unknown type.
-            // Can anything else happen?
-            expression.source.accept(this);
+            } else {
+                expression.source.accept(this);
+            }
             return VisitDecision.STOP;
         }
 
@@ -548,6 +718,7 @@ public class ToRustInnerVisitor extends InnerVisitor {
     @Override
     public VisitDecision preorder(DBSPConditionalAggregateExpression expression) {
         RustSqlRuntimeLibrary.FunctionDescription implementation = RustSqlRuntimeLibrary.INSTANCE.getImplementation(
+                expression.getNode(),
                 expression.opcode, expression.getType(), expression.left.getType(), expression.right.getType());
         this.builder.append(implementation.function);
         if (expression.condition != null)
@@ -578,16 +749,39 @@ public class ToRustInnerVisitor extends InnerVisitor {
             expression.right.accept(this);
             this.builder.append("]");
             return VisitDecision.STOP;
-        } else if(expression.operation == DBSPOpcode.SQL_INDEX) {
-            this.builder.append("index_")
-                    .append(expression.left.getType().nullableSuffix())
-                    .append("_")
-                    .append(expression.right.getType().nullableSuffix())
-                    .append("(&");
-            expression.left.accept(this);
-            this.builder.append(", ");
-            expression.right.accept(this);
-            this.builder.append(" - 1)");
+        } else if (expression.operation == DBSPOpcode.SQL_INDEX) {
+            DBSPType collectionType = expression.left.getType();
+            if (collectionType.is(DBSPTypeVec.class)) {
+                DBSPTypeVec vec = collectionType.to(DBSPTypeVec.class);
+                this.builder.append("index")
+                        .append("_")
+                        .append(expression.left.getType().nullableSuffix())
+                        .append("_")
+                        .append(vec.getElementType().nullableSuffix())
+                        .append("_")
+                        .append(expression.right.getType().nullableSuffix())
+                        .append("(");
+                expression.left.accept(this);
+                this.builder.append(", ");
+                expression.right.accept(this);
+                this.builder.append(" - 1)");
+            } else if (collectionType.is(DBSPTypeMap.class)) {
+                DBSPTypeMap vec = collectionType.to(DBSPTypeMap.class);
+                this.builder.append("map_index")
+                        .append("_")
+                        .append(expression.left.getType().nullableSuffix())
+                        .append("_")
+                        .append(vec.getKeyType().nullableSuffix())
+                        .append("_")
+                        .append(expression.right.getType().nullableSuffix())
+                        .append("(");
+                expression.left.accept(this);
+                this.builder.append(", ");
+                expression.right.accept(this);
+                this.builder.append(")");
+            } else {
+                throw new UnsupportedException(expression.getNode());
+            }
             return VisitDecision.STOP;
         } else if (expression.operation == DBSPOpcode.DIV_NULL) {
             this.builder.append("div_null")
@@ -601,6 +795,7 @@ public class ToRustInnerVisitor extends InnerVisitor {
             return VisitDecision.STOP;
         }
         RustSqlRuntimeLibrary.FunctionDescription function = RustSqlRuntimeLibrary.INSTANCE.getImplementation(
+                expression.getNode(),
                 expression.operation,
                 expression.getType(),
                 expression.left.getType(),
@@ -651,6 +846,11 @@ public class ToRustInnerVisitor extends InnerVisitor {
                     .append("_")
                     .append(expression.source.getType().baseTypeWithSuffix())
                     .append("_(");
+            expression.source.accept(this);
+            this.builder.append(")");
+            return VisitDecision.STOP;
+        } else if (expression.operation == DBSPOpcode.TYPEDBOX) {
+            this.builder.append("TypedBox::new(");
             expression.source.accept(this);
             this.builder.append(")");
             return VisitDecision.STOP;
@@ -736,14 +936,16 @@ public class ToRustInnerVisitor extends InnerVisitor {
         if (!function.returnType.is(DBSPTypeVoid.class)) {
             builder.append("-> ");
             function.returnType.accept(this);
+            builder.append(" ");
         }
         if (function.body.is(DBSPBlockExpression.class)) {
             function.body.accept(this);
         } else {
-            this.builder.append("\n{").increase();
+            this.builder.append("{").increase();
             function.body.accept(this);
             this.builder.decrease()
-                    .append("\n}");
+                    .newline()
+                    .append("}");
         }
         return VisitDecision.STOP;
     }
@@ -777,6 +979,14 @@ public class ToRustInnerVisitor extends InnerVisitor {
             arg.accept(this);
         }
         this.builder.append(")");
+        return VisitDecision.STOP;
+    }
+
+    @Override
+    public VisitDecision preorder(DBSPQuestionExpression expression) {
+        this.builder.append("(");
+        expression.source.accept(this);
+        this.builder.append("?)");
         return VisitDecision.STOP;
     }
 
@@ -868,6 +1078,15 @@ public class ToRustInnerVisitor extends InnerVisitor {
         return VisitDecision.STOP;
     }
 
+    @Override
+    public VisitDecision preorder(DBSPUnwrapExpression expression) {
+        this.builder.append("(");
+        expression.expression.accept(this);
+        this.builder.append(".unwrap()");
+        this.builder.append(")");
+        return VisitDecision.STOP;
+    }
+
     public VisitDecision preorder(DBSPEnumValue expression) {
         this.builder.append(expression.enumName)
                 .append("::")
@@ -878,6 +1097,14 @@ public class ToRustInnerVisitor extends InnerVisitor {
     @Override
     public VisitDecision preorder(DBSPFieldExpression expression) {
         expression.expression.accept(this);
+        DBSPType baseType = expression.expression.getType();
+        if (baseType.mayBeNull) {
+            // TODO: this should be done differently
+            if (!baseType.hasCopy() &&
+                    !expression.expression.is(DBSPCloneExpression.class))
+                this.builder.append(".clone()");
+            this.builder.append(".unwrap()");
+        }
         this.builder.append(".")
                 .append(expression.fieldNo);
         return VisitDecision.STOP;
@@ -915,9 +1142,9 @@ public class ToRustInnerVisitor extends InnerVisitor {
 
     @Override
     public VisitDecision preorder(DBSPForExpression node) {
-        this.builder.append("for ");
-        node.variable.accept(this);
-        this.builder.append(" in ");
+        this.builder.append("for ")
+                .append(node.variable)
+                .append(" in ");
         node.iterated.accept(this);
         this.builder.append(" ");
         node.block.accept(this);
@@ -1068,9 +1295,13 @@ public class ToRustInnerVisitor extends InnerVisitor {
 
     @Override
     public VisitDecision preorder(DBSPTypeRef type) {
+        if (type.mayBeNull)
+            this.builder.append("Option<");
         this.builder.append("&")
                 .append(type.mutable ? "mut " : "");
         type.type.accept(this);
+        if (type.mayBeNull)
+            this.builder.append(">");
         return VisitDecision.STOP;
     }
 
@@ -1085,8 +1316,7 @@ public class ToRustInnerVisitor extends InnerVisitor {
 
     @Override
     public VisitDecision preorder(DBSPTypeStruct.Field field) {
-        this.builder.append("r#")
-                .append(field.sanitizedName)
+        this.builder.append(field.getSanitizedName())
                 .append(": ");
         field.type.accept(this);
         return VisitDecision.STOP;
@@ -1094,15 +1324,16 @@ public class ToRustInnerVisitor extends InnerVisitor {
 
     @Override
     public VisitDecision preorder(DBSPStructItem item) {
-        this.builder.append("#[derive(Clone, Debug, Eq, PartialEq, Default, serde::Serialize)]")
+        this.builder.append("#[derive(Clone, Debug, Eq, PartialEq, Default, serde::Serialize, serde::Deserialize)]")
                 .newline();
-        builder.append("struct r#")
+        builder.append("struct ")
                     .append(Objects.requireNonNull(item.type.sanitizedName))
                 .append(" {")
                 .increase();
         for (DBSPTypeStruct.Field field: item.type.fields.values()) {
             builder.append("#[serde(rename = \"")
-                    .append(Utilities.escape(field.name))
+                    .append(Utilities.escape(
+                            this.options.canonicalName(field.name)))
                     .append("\")]\n");
             field.accept(this);
             this.builder.append(",")
@@ -1117,8 +1348,11 @@ public class ToRustInnerVisitor extends InnerVisitor {
     @Override
     public VisitDecision preorder(DBSPTypeStruct type) {
         // A *reference* to a struct type is just the type name.
-        this.builder.append("r#")
-                .append(Objects.requireNonNull(type.sanitizedName));
+        if (type.mayBeNull)
+            this.builder.append("Option<");
+        this.builder.append(type.sanitizedName);
+        if (type.mayBeNull)
+            this.builder.append(">");
         return VisitDecision.STOP;
     }
 
@@ -1174,10 +1408,11 @@ public class ToRustInnerVisitor extends InnerVisitor {
         throw new InternalCompilerError("Should have been eliminated", implementation.getNode());
     }
 
-    public static String toRustString(IErrorReporter reporter, IDBSPInnerNode node, boolean compact) {
+    public static String toRustString(IErrorReporter reporter, IDBSPInnerNode node,
+                                      CompilerOptions options, boolean compact) {
         StringBuilder builder = new StringBuilder();
         IndentStream stream = new IndentStream(builder);
-        ToRustInnerVisitor visitor = new ToRustInnerVisitor(reporter, stream, compact);
+        ToRustInnerVisitor visitor = new ToRustInnerVisitor(reporter, stream, options, compact);
         node.accept(visitor);
         return builder.toString();
     }

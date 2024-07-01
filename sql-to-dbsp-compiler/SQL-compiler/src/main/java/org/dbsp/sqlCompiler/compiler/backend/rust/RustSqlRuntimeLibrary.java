@@ -23,12 +23,14 @@
 
 package org.dbsp.sqlCompiler.compiler.backend.rust;
 
+import org.dbsp.sqlCompiler.compiler.errors.CompilationError;
 import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
-import org.dbsp.sqlCompiler.compiler.frontend.CalciteObject;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.ir.expression.*;
 import org.dbsp.sqlCompiler.ir.type.*;
 import org.dbsp.sqlCompiler.ir.type.primitive.*;
 import org.dbsp.sqlCompiler.compiler.errors.UnimplementedException;
+import org.dbsp.util.Utilities;
 
 import javax.annotation.Nullable;
 import java.util.*;
@@ -75,6 +77,8 @@ public class RustSqlRuntimeLibrary {
         this.arithmeticFunctions.put("agg_and", DBSPOpcode.AGG_AND);
         this.arithmeticFunctions.put("agg_or", DBSPOpcode.AGG_OR);
         this.arithmeticFunctions.put("agg_xor", DBSPOpcode.AGG_XOR);
+        this.arithmeticFunctions.put("agg_lte", DBSPOpcode.AGG_LTE);
+        this.arithmeticFunctions.put("agg_gte", DBSPOpcode.AGG_GTE);
 
         this.dateFunctions.put("plus", DBSPOpcode.ADD);
         this.dateFunctions.put("minus", DBSPOpcode.SUB);
@@ -89,6 +93,9 @@ public class RustSqlRuntimeLibrary {
         this.dateFunctions.put("is_distinct", DBSPOpcode.IS_DISTINCT);
         this.dateFunctions.put("agg_max", DBSPOpcode.AGG_MAX);
         this.dateFunctions.put("agg_min", DBSPOpcode.AGG_MIN);
+        this.dateFunctions.put("agg_gte", DBSPOpcode.AGG_GTE);
+        this.dateFunctions.put("min", DBSPOpcode.MIN);
+        this.dateFunctions.put("max", DBSPOpcode.MAX);
 
         this.stringFunctions.put("concat", DBSPOpcode.CONCAT);
         this.stringFunctions.put("eq", DBSPOpcode.EQ);
@@ -142,7 +149,7 @@ public class RustSqlRuntimeLibrary {
         }
     }
 
-    public FunctionDescription getImplementation(
+    public FunctionDescription getImplementation(CalciteObject node,
             DBSPOpcode opcode, @Nullable DBSPType expectedReturnType,
             DBSPType ltype, @Nullable DBSPType rtype) {
         if (ltype.is(DBSPTypeAny.class) || (rtype != null && rtype.is(DBSPTypeAny.class)))
@@ -159,8 +166,12 @@ public class RustSqlRuntimeLibrary {
             if (opcode == DBSPOpcode.SUB || opcode == DBSPOpcode.ADD) {
                 if (ltype.is(DBSPTypeTimestamp.class) || ltype.is(DBSPTypeDate.class)) {
                     assert expectedReturnType != null;
+                    assert rtype != null;
                     returnType = expectedReturnType;
                     suffixReturn = "_" + returnType.baseTypeWithSuffix();
+                    if (rtype.is(IsNumericType.class))
+                        throw new CompilationError("Cannot apply operation " + Utilities.singleQuote(opcode.toString()) +
+                                " to arguments of type " + ltype.asSqlString() + " and " + rtype.asSqlString(), node);
                 }
             }
         } else if (ltype.is(IsNumericType.class)) {
@@ -182,7 +193,8 @@ public class RustSqlRuntimeLibrary {
             returnType = new DBSPTypeBool(CalciteObject.EMPTY, false).setMayBeNull(anyNull);
         if (opcode == DBSPOpcode.IS_TRUE || opcode == DBSPOpcode.IS_NOT_TRUE ||
                 opcode == DBSPOpcode.IS_FALSE || opcode == DBSPOpcode.IS_NOT_FALSE ||
-                opcode == DBSPOpcode.IS_DISTINCT || opcode == DBSPOpcode.IS_NOT_DISTINCT)
+                opcode == DBSPOpcode.IS_DISTINCT || opcode == DBSPOpcode.IS_NOT_DISTINCT ||
+                opcode == DBSPOpcode.AGG_LTE || opcode == DBSPOpcode.AGG_GTE)
             returnType = new DBSPTypeBool(CalciteObject.EMPTY, false);
         if (opcode == DBSPOpcode.CONCAT)
             returnType = expectedReturnType;
@@ -190,11 +202,14 @@ public class RustSqlRuntimeLibrary {
         String suffixr = rtype == null ? "" : rtype.nullableSuffix();
         String tsuffixl;
         String tsuffixr;
-        if (opcode.equals(DBSPOpcode.IS_DISTINCT) || opcode.equals(DBSPOpcode.IS_NOT_DISTINCT)) {
+        if (opcode == DBSPOpcode.IS_DISTINCT || opcode == DBSPOpcode.IS_NOT_DISTINCT) {
             tsuffixl = "";
             tsuffixr = "";
             suffixl = "";
             suffixr = "";
+        } else if (opcode == DBSPOpcode.AGG_GTE || opcode == DBSPOpcode.AGG_LTE) {
+            tsuffixl = "";
+            tsuffixr = "";
         } else {
             tsuffixl = ltype.to(DBSPTypeBaseType.class).shortName();
             tsuffixr = (rtype == null) ? "" : rtype.to(DBSPTypeBaseType.class).shortName();

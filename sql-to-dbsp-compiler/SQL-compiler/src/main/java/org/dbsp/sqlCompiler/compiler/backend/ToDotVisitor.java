@@ -23,9 +23,19 @@
 
 package org.dbsp.sqlCompiler.compiler.backend;
 
-import org.dbsp.sqlCompiler.circuit.DBSPPartialCircuit;
 import org.dbsp.sqlCompiler.circuit.DBSPCircuit;
-import org.dbsp.sqlCompiler.circuit.operator.*;
+import org.dbsp.sqlCompiler.circuit.DBSPPartialCircuit;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPAggregateOperatorBase;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPConstantOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPDelayOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPDelayOutputOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPFlatMapOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPPartitionedRollingAggregateWithWaterlineOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPSourceBaseOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPUnaryOperator;
+import org.dbsp.sqlCompiler.circuit.operator.DBSPViewBaseOperator;
+import org.dbsp.sqlCompiler.compiler.CompilerOptions;
 import org.dbsp.sqlCompiler.compiler.IErrorReporter;
 import org.dbsp.sqlCompiler.compiler.backend.rust.LowerCircuitVisitor;
 import org.dbsp.sqlCompiler.compiler.backend.rust.ToRustInnerVisitor;
@@ -43,30 +53,37 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.HashSet;
+import java.util.Set;
 
-/**
- * This visitor dumps the circuit to a dot file, so it can be visualized.
- * A utility method can create a jpg or png or other format supported by dot.
- */
+/** This visitor dumps the circuit to a dot file, so it can be visualized.
+ * A utility method creates a jpg or png or other format supported by dot. */
 public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
-    private final IndentStream stream;
-    // If true show code, otherwise just topology
-    private final boolean details;
+    protected final IndentStream stream;
+    // A higher value -> more details
+    protected final int details;
+    protected final Set<DBSPOperator> edgesLabeled;
 
-    public ToDotVisitor(IErrorReporter reporter, IndentStream stream, boolean details) {
+    public ToDotVisitor(IErrorReporter reporter, IndentStream stream, int details) {
         super(reporter);
         this.stream = stream;
         this.details = details;
+        this.edgesLabeled = new HashSet<>();
+    }
+
+    static String isMultiset(DBSPOperator operator) {
+        return operator.isMultiset ? "" : "*";
     }
 
     @Override
     public VisitDecision preorder(DBSPSourceBaseOperator node) {
-        String name = node.getOutputName();
+        String name = node.tableName;
         if (node.is(DBSPDelayOutputOperator.class))
             name = "delay";
         this.stream.append(node.getOutputName())
-                .append(" [ shape=box,label=\"")
+                .append(" [ shape=box style=filled fillcolor=lightgrey label=\"")
                 .append(node.getIdString())
+                .append(isMultiset(node))
                 .append(" ")
                 .append(name)
                 .append("\" ]")
@@ -74,12 +91,35 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
         return VisitDecision.STOP;
     }
 
+    @Override
+    public VisitDecision preorder(DBSPConstantOperator node) {
+        this.stream.append(node.getOutputName())
+                .append(" [ shape=box,label=\"")
+                .append(node.getIdString())
+                .append(isMultiset(node))
+                .append(" ")
+                .append(getFunction(node))
+                .append("\" ]")
+                .newline();
+        return VisitDecision.STOP;
+    }
+
+    public String getEdgeLabel(DBSPOperator source) {
+        return source.getOutputRowType().toString();
+    }
+
     void addInputs(DBSPOperator node) {
-        for (DBSPOperator input: node.inputs) {
+        for (DBSPOperator input : node.inputs) {
             this.stream.append(input.getOutputName())
                     .append(" -> ")
-                    .append(node.getOutputName())
-                    .append(";")
+                    .append(node.getOutputName());
+            if (this.details >= 2 && !this.edgesLabeled.contains(input)) {
+                this.stream.append(" [xlabel=")
+                        .append(Utilities.doubleQuote(this.getEdgeLabel(input)))
+                        .append("]");
+                this.edgesLabeled.add(input);
+            }
+            this.stream.append(";")
                     .newline();
         }
     }
@@ -100,13 +140,16 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
     }
 
     @Override
-    public VisitDecision preorder(DBSPSinkOperator node) {
+    public VisitDecision preorder(DBSPViewBaseOperator node) {
         this.stream.append(node.getOutputName())
                 .append(" [ shape=box,label=\"")
                 .append(node.getIdString())
+                .append(isMultiset(node))
                 .append(" ")
-                .append(node.getOutputName())
-                .append("\" ]")
+                .append(node.viewName)
+                .append("\"")
+                .append(" style=filled fillcolor=lightgrey")
+                .append("]")
                 .newline();
         this.addInputs(node);
         return VisitDecision.STOP;
@@ -120,14 +163,23 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
                 DBSPAggregate.Implementation impl = aggregate.aggregate.combine(this.errorReporter);
                 expression = impl.asFold(true);
             }
+        } else if (node.is(DBSPPartitionedRollingAggregateWithWaterlineOperator.class)) {
+            DBSPPartitionedRollingAggregateWithWaterlineOperator aggregate =
+                    node.to(DBSPPartitionedRollingAggregateWithWaterlineOperator.class);
+            if (aggregate.aggregate != null) {
+                DBSPAggregate.Implementation impl = aggregate.aggregate.combine(this.errorReporter);
+                expression = impl.asFold(true);
+            }
         }
         if (expression == null)
             return "";
-        // Do some manually some lowering.
         if (node.is(DBSPFlatMapOperator.class)) {
-            expression = LowerCircuitVisitor.rewriteFlatmap(expression.to(DBSPFlatmap.class));
+            if (expression.is(DBSPFlatmap.class)) {
+                expression = LowerCircuitVisitor.rewriteFlatmap(expression.to(DBSPFlatmap.class));
+            }
         }
-        String result = ToRustInnerVisitor.toRustString(this.errorReporter, expression, true);
+        String result = ToRustInnerVisitor.toRustString(
+                this.errorReporter, expression, CompilerOptions.getDefault(), true);
         result = result.replace("\n", "\\l");
         return Utilities.escapeDoubleQuotes(result);
     }
@@ -136,8 +188,21 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
         return switch (operator.operation) {
             case "waterline_monotonic" -> " style=filled fillcolor=lightgreen";
             case "controlled_filter" -> " style=filled fillcolor=cyan";
-            case "apply" -> " style=filled fillcolor=yellow";
+            case "apply", "apply2" -> " style=filled fillcolor=yellow";
             case "integrate_trace_retain_keys", "integrate_trace_retain_values" -> " style=filled fillcolor=pink";
+            // stateful operators
+            case "distinct",
+                 // all aggregates require an upsert, which is stateful, even the ones that are linear
+                 "aggregate", "partitioned_rolling_aggregate", "aggregate_linear",
+                 "stream_aggregate", "stream_aggregate_linear", "partitioned_rolling_aggregate_with_waterline",
+                 "partitioned_tree_aggregate",
+                 // some joins require integrators
+                 "join", "join_flatmap",
+                 // delays contain state
+                 "delay_trace", "delay", "differentiate",
+                 // group operators
+                 "topK", "lag_custom_order", "upsert",
+                 "integrate" -> " style=filled fillcolor=red";
             default -> "";
         };
     }
@@ -149,9 +214,11 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
                 .append(this.getColor(node))
                 .append(" label=\"")
                 .append(node.getIdString())
+                .append(isMultiset(node))
                 .append(" ")
-                .append(node.operation);
-        if (this.details) {
+                .append(node.operation)
+                .append(node.comment != null ? node.comment : "");
+        if (this.details > 3) {
             this.stream
                     .append("(")
                     .append(this.getFunction(node))
@@ -176,6 +243,7 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
     public VisitDecision preorder(DBSPPartialCircuit circuit) {
         this.stream.append("{")
                 .increase();
+        this.stream.append("ordering=\"in\"").newline();
         return VisitDecision.CONTINUE;
     }
 
@@ -186,8 +254,13 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
                 .newline();
     }
 
-    public static void toDot(IErrorReporter reporter, String fileName, boolean details,
-                             @Nullable String outputFormat, DBSPCircuit circuit) {
+    public interface VisitorConstructor {
+        CircuitVisitor create(IndentStream stream);
+    }
+
+    public static void toDot(IErrorReporter reporter, String fileName, int details,
+                      @Nullable String outputFormat, DBSPCircuit circuit, VisitorConstructor constructor) {
+        System.out.println("Writing circuit to " + fileName);
         Logger.INSTANCE.belowLevel("ToDotVisitor", 1)
                 .append("Writing circuit to ")
                 .append(fileName)
@@ -198,7 +271,8 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
             tmp.deleteOnExit();
             PrintWriter writer = new PrintWriter(tmp.getAbsolutePath());
             IndentStream stream = new IndentStream(writer);
-            circuit.accept(new ToDotVisitor(reporter, stream, details));
+            CircuitVisitor visitor = constructor.create(stream);
+            circuit.accept(visitor);
             writer.close();
             if (outputFormat != null)
                 Utilities.runProcess(".", "dot", "-T", outputFormat,
@@ -213,5 +287,10 @@ public class ToDotVisitor extends CircuitVisitor implements IWritesLogs {
             }
             throw new RuntimeException(ex);
         }
+    }
+
+    public static void toDot(IErrorReporter reporter, String fileName, int details,
+                             @Nullable String outputFormat, DBSPCircuit circuit) {
+        toDot(reporter, fileName, details, outputFormat, circuit, stream -> new ToDotVisitor(reporter, stream, details));
     }
 }

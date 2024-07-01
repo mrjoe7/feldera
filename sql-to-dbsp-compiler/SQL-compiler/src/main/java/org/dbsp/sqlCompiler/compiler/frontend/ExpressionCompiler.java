@@ -24,8 +24,11 @@
 package org.dbsp.sqlCompiler.compiler.frontend;
 
 import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
+import org.apache.calcite.rex.RexCorrelVariable;
+import org.apache.calcite.rex.RexFieldAccess;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
@@ -44,13 +47,17 @@ import org.dbsp.sqlCompiler.compiler.errors.InternalCompilerError;
 import org.dbsp.sqlCompiler.compiler.errors.SourcePosition;
 import org.dbsp.sqlCompiler.compiler.errors.SourcePositionRange;
 import org.dbsp.sqlCompiler.compiler.errors.UnimplementedException;
-import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.CustomFunctions;
+import org.dbsp.sqlCompiler.compiler.errors.UnsupportedException;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteCompiler.ExternalFunction;
+import org.dbsp.sqlCompiler.compiler.frontend.calciteObject.CalciteObject;
 import org.dbsp.sqlCompiler.ir.expression.DBSPApplyExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPBinaryExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPConstructorExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPExpression;
+import org.dbsp.sqlCompiler.ir.expression.DBSPFieldExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPIfExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPOpcode;
+import org.dbsp.sqlCompiler.ir.expression.DBSPTupleExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPUnaryExpression;
 import org.dbsp.sqlCompiler.ir.expression.DBSPVariablePath;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPBinaryLiteral;
@@ -67,6 +74,7 @@ import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIntervalMillisLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPIntervalMonthsLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPKeywordLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPLiteral;
+import org.dbsp.sqlCompiler.ir.expression.literal.DBSPMapLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPNullLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPRealLiteral;
 import org.dbsp.sqlCompiler.ir.expression.literal.DBSPStringLiteral;
@@ -78,9 +86,12 @@ import org.dbsp.sqlCompiler.ir.path.DBSPPath;
 import org.dbsp.sqlCompiler.ir.type.DBSPType;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeAny;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeRef;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeResult;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeMap;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeResult;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeStruct;
 import org.dbsp.sqlCompiler.ir.type.DBSPTypeTuple;
-import org.dbsp.sqlCompiler.ir.type.DBSPTypeVec;
+import org.dbsp.sqlCompiler.ir.type.DBSPTypeTupleBase;
+import org.dbsp.sqlCompiler.ir.type.user.DBSPTypeVec;
 import org.dbsp.sqlCompiler.ir.type.IsDateType;
 import org.dbsp.sqlCompiler.ir.type.IsNumericType;
 import org.dbsp.sqlCompiler.ir.type.primitive.DBSPTypeBinary;
@@ -115,7 +126,8 @@ import java.util.Objects;
 
 import static org.dbsp.sqlCompiler.ir.type.DBSPTypeCode.NULL;
 
-public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implements IWritesLogs, ICompilerComponent {
+public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression>
+        implements IWritesLogs, ICompilerComponent {
     private final TypeCompiler typeCompiler;
     @Nullable
     public final DBSPVariablePath inputRow;
@@ -152,11 +164,9 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
             throw new InternalCompilerError("Expected a reference type for row", inputRow.getNode());
     }
 
-    /**
-     * Convert an expression that refers to a field in the input row.
+    /** Convert an expression that refers to a field in the input row.
      * @param inputRef   index in the input row.
-     * @return           the corresponding DBSP expression.
-     */
+     * @return           the corresponding DBSP expression. */
     @Override
     public DBSPExpression visitInputRef(RexInputRef inputRef) {
         CalciteObject node = CalciteObject.create(inputRef);
@@ -172,6 +182,14 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
         if (index - type.size() < this.constants.size())
             return this.visitLiteral(this.constants.get(index - type.size()));
         throw new InternalCompilerError("Index in row out of bounds ", node);
+    }
+
+    @Override
+    public DBSPExpression visitCorrelVariable(RexCorrelVariable correlVariable) {
+        CalciteObject node = CalciteObject.create(correlVariable);
+        if (this.inputRow == null)
+            throw new InternalCompilerError("Correlation variable referenced without a row context", node);
+        return this.inputRow.deref().deepCopy();
     }
 
     @Override
@@ -326,12 +344,29 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
     }
 
     /** Creates a call to the INDICATOR function,
-     * which returns 0 for None and 1 for Some. */
+     * which returns 0 for None and 1 for Some.
+     * For tuples it returns the multiplication of the indicator for all fields */
     public static DBSPExpression makeIndicator(
             CalciteObject node, DBSPType resultType, DBSPExpression argument) {
         assert !resultType.mayBeNull;
         assert resultType.is(IsNumericType.class);
-        return new DBSPUnaryExpression(node, resultType, DBSPOpcode.INDICATOR, argument.borrow());
+        DBSPType argType = argument.getType();
+        if (argType.is(DBSPTypeTuple.class)) {
+            DBSPTypeTupleBase tuple = argument.getType().to(DBSPTypeTuple.class);
+            DBSPExpression result = resultType.to(IsNumericType.class).getOne();
+            for (int i = 0; i < tuple.size(); i++) {
+                DBSPExpression next = makeIndicator(node, resultType, argument.field(i));
+                result = new DBSPBinaryExpression(node, resultType, DBSPOpcode.MUL, result, next);
+            }
+            return result;
+        } else  {
+            // scalar types, but not only.  Nullable structs fall here too.
+            if (!argType.mayBeNull) {
+                return resultType.to(IsNumericType.class).getOne();
+            } else {
+                return new DBSPUnaryExpression(node, resultType, DBSPOpcode.INDICATOR, argument.borrow());
+            }
+        }
     }
 
     public static DBSPExpression makeBinaryExpression(
@@ -361,7 +396,8 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                 right = right.cast(commonBase.setMayBeNull(rightType.mayBeNull));
         }
         // TODO: we don't need the whole function here, just the result type.
-        RustSqlRuntimeLibrary.FunctionDescription function = RustSqlRuntimeLibrary.INSTANCE.getImplementation(
+        RustSqlRuntimeLibrary.FunctionDescription function =
+                RustSqlRuntimeLibrary.INSTANCE.getImplementation(node,
                 opcode, type, left.getType(), right.getType());
         DBSPExpression call = new DBSPBinaryExpression(node, function.returnType, opcode, left, right);
         return call.cast(type);
@@ -408,8 +444,8 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
         return call.op.getName().toLowerCase();
     }
 
-    static DBSPExpression compilePolymorphicFunction(String opName, CalciteObject node, DBSPType resultType,
-                                              List<DBSPExpression> ops, Integer... expectedArgCount) {
+    public static DBSPExpression compilePolymorphicFunction(String opName, CalciteObject node, DBSPType resultType,
+                                                            List<DBSPExpression> ops, Integer... expectedArgCount) {
         validateArgCount(node, ops.size(), expectedArgCount);
         StringBuilder functionName = new StringBuilder(opName);
         DBSPExpression[] operands = ops.toArray(new DBSPExpression[0]);
@@ -605,12 +641,20 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
 
         if (!argElemType.sameType(expectedType)) {
             // Apply a cast to every element of the vector
-            DBSPVariablePath var = new DBSPVariablePath("v", argElemType.ref());
+            DBSPVariablePath var = argElemType.ref().var();
             DBSPExpression cast = var.deref().cast(expectedType).closure(var.asParameter());
             arg = new DBSPApplyExpression("map", expectedVecType, arg.borrow(), cast);
         }
 
         return arg;
+    }
+
+    @Override
+    public DBSPExpression visitFieldAccess(RexFieldAccess field) {
+        CalciteObject node = CalciteObject.create(field);
+        DBSPExpression source = field.getReferenceExpr().accept(this);
+        RelDataTypeField dataField = field.getField();
+        return new DBSPFieldExpression(node, source, dataField.getIndex());
     }
 
     @Override
@@ -757,6 +801,9 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                 }
                 return result;
             }
+            case CHAR_LENGTH: {
+                return compileFunction(call, node, type, ops, 1);
+            }
             case ST_POINT: {
                 // Sometimes the Calcite type for ST_POINT is nullable
                 // even if all arguments are not nullable.  So we can't
@@ -790,7 +837,8 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                         DBSPType leftType = left.getType();
                         DBSPType rightType = right.getType();
 
-                        if (rightType.is(DBSPTypeNull.class)) {
+                        if (rightType.is(DBSPTypeNull.class) ||
+                                (right.is(DBSPLiteral.class) && right.to(DBSPLiteral.class).isNull)) {
                             this.compiler.reportWarning(node.getPositionRange(),
                                     "evaluates to NULL", node + ": always returns NULL");
                             return type.nullValue();
@@ -932,7 +980,6 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                         }
                         return compileFunction(module_prefix + getCallName(call), node, type, ops, 3, 4);
                     }
-                    case "char_length":
                     case "ascii":
                     case "chr":
                     case "lower":
@@ -963,8 +1010,6 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                     case "division":
                         return makeBinaryExpression(node, type, DBSPOpcode.DIV, ops);
                     case "element": {
-                        // https://issues.apache.org/jira/projects/CALCITE/issues/CALCITE-6228
-                        type = type.setMayBeNull(true);
                         DBSPExpression arg = ops.get(0);
                         DBSPTypeVec arrayType = arg.getType().to(DBSPTypeVec.class);
                         String method = "element";
@@ -1000,16 +1045,53 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                 }
                 return this.compileUDF(node, call, type, ops);
             }
+            case ARRAYS_OVERLAP: {
+                if (ops.size() != 2)
+                    throw new UnimplementedException(node);
+
+                DBSPExpression arg0 = ops.get(0);
+                DBSPTypeVec arg0Vec = arg0.getType().to(DBSPTypeVec.class);
+                DBSPType arg0ElemType = arg0Vec.getElementType();
+
+                DBSPExpression arg1 = ops.get(1);
+                DBSPTypeVec arg1Vec = arg1.getType().to(DBSPTypeVec.class);
+                DBSPType arg1ElemType = arg1Vec.getElementType();
+
+                // if the two arrays are of different types of elements
+                if (!arg0ElemType.sameType(arg1ElemType)) {
+                    // check if the nullability of arg0 needs to change to match arg1
+                    if (arg1ElemType.mayBeNull && !arg0ElemType.mayBeNull) {
+                        if (arg0Vec.mayBeNull && arg0.equals(arg0Vec.nullValue())) {
+                            arg0 = new DBSPTypeVec(arg1ElemType, true).nullValue();
+                            ops.set(0, arg0);
+                        } else {
+                            arg0 = this.ensureArrayElementsOfType(arg0, arg1ElemType);
+                            ops.set(0, arg0);
+                        }
+                    } else if (arg0ElemType.mayBeNull && !arg1ElemType.mayBeNull) {
+                        if (arg1Vec.mayBeNull && arg1.equals(arg1Vec.nullValue())) {
+                            arg1 = new DBSPTypeVec(arg0ElemType, true).nullValue();
+                            ops.set(1, arg1);
+                        }
+                        arg1 = this.ensureArrayElementsOfType(arg1, arg0ElemType);
+                        ops.set(1, arg1);
+                    }
+                    // if the nullability is not the problem, return an unimplemented error as types are different
+                    else {
+                        this.compiler.reportError(node.getPositionRange(), "Array elements are of different types",
+                                "Fist array is of type: " + arg0ElemType + " and second array is of type: " + arg1ElemType);
+                    }
+                }
+
+                return compileFunction(call, node, type, ops, 2);
+            }
             case OTHER:
                 String opName = call.op.getName().toLowerCase();
                 //noinspection SwitchStatementWithTooFewBranches
-                switch (opName) {
-                    case "||":
-                        return makeBinaryExpression(node, type, DBSPOpcode.CONCAT, ops);
-                    default:
-                        break;
-                }
-                throw new UnimplementedException(node);
+                return switch (opName) {
+                    case "||" -> makeBinaryExpression(node, type, DBSPOpcode.CONCAT, ops);
+                    default -> throw new UnimplementedException(node);
+                };
             case EXTRACT: {
                 // This is also hit for "date_part", which is an alias for "extract".
                 return compileKeywordFunction(call, node, "extract", type, ops, 0, 2);
@@ -1063,11 +1145,30 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                 List<DBSPExpression> args = Linq.map(ops, o -> o.cast(elemType));
                 return new DBSPVecLiteral(node, type, args);
             }
+            case MAP_VALUE_CONSTRUCTOR: {
+                DBSPTypeMap map = type.to(DBSPTypeMap.class);
+                List<DBSPExpression> keys = DBSPMapLiteral.getKeys(ops);
+                keys = Linq.map(keys, o -> o.cast(map.getKeyType()));
+                List<DBSPExpression> values = DBSPMapLiteral.getValues(ops);
+                values = Linq.map(values, o -> o.cast(map.getValueType()));
+                return new DBSPMapLiteral(map, keys, values);
+            }
             case ITEM: {
                 if (call.operands.size() != 2)
                     throw new UnimplementedException(node);
-                return new DBSPBinaryExpression(node, type, DBSPOpcode.SQL_INDEX,
-                        ops.get(0), ops.get(1).cast(new DBSPTypeUSize(CalciteObject.EMPTY, false)));
+                DBSPType collectionType = ops.get(0).getType();
+                DBSPExpression index = ops.get(1);
+                if (collectionType.is(DBSPTypeVec.class)) {
+                    // index into a vector: cast to unsigned
+                    index = index.cast(new DBSPTypeUSize(CalciteObject.EMPTY, false));
+                } else if (collectionType.is(DBSPTypeMap.class)) {
+                    // index into a map
+                    DBSPTypeMap map = collectionType.to(DBSPTypeMap.class);
+                    index = index.cast(map.getKeyType());
+                } else {
+                    throw new UnsupportedException(node);
+                }
+                return new DBSPBinaryExpression(node, type, DBSPOpcode.SQL_INDEX, ops.get(0), index);
             }
             case TIMESTAMP_DIFF:
             case TRIM: {
@@ -1169,8 +1270,13 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                     if (elemType.is(DBSPTypeNull.class)) {
                         // cast to type of arg1
                         arg0 = ensureArrayElementsOfType(arg0, arg1.type.setMayBeNull(true));
-                    } else {
-                        arg1 = arg1.cast(elemType.setMayBeNull(arg1.type.mayBeNull));
+                    }
+                    // if apart from the null case, the types are different
+                    else if (!elemType.sameType(arg1.type.setMayBeNull(elemType.mayBeNull))) {
+                        this.compiler.reportError(node.getPositionRange(), "array elements and argument of different types",
+                                "Fist argument is an array of type: " + elemType +
+                                        " and second argument is of type: " + arg1.type
+                        );
                     }
                 }
 
@@ -1200,34 +1306,34 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
                 if (call.operands.size() != 1)
                     throw new UnimplementedException(node);
 
-                DBSPTypeVec vec = type.to(DBSPTypeVec.class);
                 DBSPExpression arg0 = ops.get(0);
-
-                DBSPTypeVec arg0type = arg0.getType().to(DBSPTypeVec.class);
-
-                if (arg0type.sameType(vec)) {
-                    // the expected result type is the same as the argument type
-                    // meaning no element in the array can be nullable
-                    // so just return the current argument as is
+                DBSPTypeVec vecType = arg0.getType().to(DBSPTypeVec.class);
+                DBSPType elemType = vecType.getElementType();
+                if (!elemType.mayBeNull) {
+                    // The element type is not nullable.
                     String warningMessage =
                             node + ": no null elements in the array";
                     this.compiler.reportWarning(node.getPositionRange(), "unnecessary function call", warningMessage);
                     return arg0;
                 }
+                if (elemType.sameType(DBSPTypeNull.getDefault())) {
+                    String warningMessage =
+                            node + ": all elements are null; result is always an empty array";
+                    this.compiler.reportWarning(node.getPositionRange(), "unnecessary function call", warningMessage);
+                    return new DBSPVecLiteral(arg0.getNode(), arg0.getType(), Linq.list());
+                }
 
                 String method = getArrayCallName(call, arg0);
-
                 return new DBSPApplyExpression(node, method, type, arg0);
             }
             case ARRAY_REPEAT: {
                 if (call.operands.size() != 2)
                     throw new UnimplementedException(node);
-
                 String method = getArrayCallName(call);
-
-                return new DBSPApplyExpression(node, method, type, ops.get(0), ops.get(1));
+                // Calcite thinks this is nullable, but it probably shouldn't be
+                DBSPType nonNull = type.setMayBeNull(false);
+                return new DBSPApplyExpression(node, method, nonNull, ops.get(0), ops.get(1)).cast(type);
             }
-            case HOP:
             case DOT:
             default:
                 throw new UnimplementedException(node);
@@ -1250,8 +1356,21 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
 
     private DBSPExpression compileUDF(CalciteObject node, RexCall call, DBSPType type, List<DBSPExpression> ops) {
         String function = call.op.getName();  // no lowercase applied
-        CustomFunctions.ExternalFunction ef = this.compiler.getCustomFunctions()
-                .getImplementation(function);
+        boolean isConstructor = this.compiler.isStructConstructor(function);
+        if (isConstructor) {
+            DBSPTypeStruct struct = this.compiler.getStructByName(function);
+            assert struct.toTuple().sameType(type);
+            DBSPTypeTupleBase tuple = type.to(DBSPTypeTupleBase.class);
+            for (int i = 0; i < ops.size(); i++) {
+                DBSPExpression opi = ops.get(i);
+                opi = opi.applyCloneIfNeeded().cast(tuple.getFieldType(i));
+                ops.set(i, opi);
+            }
+            return new DBSPTupleExpression(node, ops);
+        }
+
+        ExternalFunction ef = this.compiler.getCustomFunctions()
+                .getSignature(function);
         if (ef == null)
             throw new CompilationError("Function " + Utilities.singleQuote(function) + " is unknown", node);
         List<DBSPType> operandTypes = Linq.map(ef.parameterList,
@@ -1262,10 +1381,17 @@ public class ExpressionCompiler extends RexVisitorImpl<DBSPExpression> implement
         arguments[0] = this.toPosition(pos).borrow();
         for (int i = 0; i < converted.size(); i++)
             arguments[i+1] = converted.get(i);
-        return new DBSPApplyExpression(function, new DBSPTypeResult(type), arguments).unwrap();
+        // The convention is that all such functions return Result.
+        // This is not true for functions that we implement internally.
+        // Currently, we need to unwrap.
+        boolean unwrap = !ef.generated;
+        if (unwrap)
+            return new DBSPApplyExpression(function, new DBSPTypeResult(type), arguments).resultUnwrap();
+        else
+            return new DBSPApplyExpression(function, type, arguments);
     }
 
-    DBSPExpression compile(RexNode expression) {
+    public DBSPExpression compile(RexNode expression) {
         Logger.INSTANCE.belowLevel(this, 3)
                 .append("Compiling ")
                 .append(expression.toString())
